@@ -11,6 +11,25 @@ plugins {
 group = "dev.citali.lunartune"
 version = "5.2.0-desktop-alpha"
 
+// The Windows CI builds x64 and arm64 separately. Each architecture gets its own
+// MSI upgrade code so installing one never upgrades/uninstalls the other.
+val lunarTuneArch: String =
+    providers.gradleProperty("lunarTuneArch").orNull
+        ?.takeIf { it == "x64" || it == "arm64" }
+        ?: if (System.getProperty("os.arch").orEmpty().lowercase() in setOf("aarch64", "arm64")) "arm64" else "x64"
+
+configurations.configureEach {
+    // compose.desktop.currentOs already adds the Skiko runtime jar for the exact
+    // OS/arch we build on. The "-all" jar carries every native for every platform
+    // (~42 MB of mostly incompressible DLLs) and would be copied into the installer.
+    exclude(group = "org.jetbrains.skiko", module = "skiko-awt-runtime-all")
+    // Optional lavaplayer modules we never register or use.
+    exclude(group = "com.github.walkyst.lavaplayer-fork", module = "lavaplayer-test-samples")
+    exclude(group = "com.github.walkyst.lavaplayer-fork", module = "lavaplayer-ext-format-xm")
+    exclude(group = "com.github.walkyst.lavaplayer-fork", module = "lavaplayer-stream-merger")
+    exclude(group = "com.github.walkyst.lavaplayer-fork", module = "lavaplayer-ext-youtube-rotator")
+}
+
 kotlin {
     jvm("desktop") {
         compilerOptions.jvmTarget.set(JvmTarget.JVM_21)
@@ -77,6 +96,23 @@ compose.desktop {
             packageVersion = "5.2.0"
             description = "LunarTune desktop music client"
             vendor = "LunarTune contributors"
+
+            // Ship a jlink runtime instead of a whole JDK. java.desktop pulls in
+            // java.xml (used by the bundled TTML DOM parser) transitively.
+            includeAllModules = false
+            modules("java.base", "java.desktop", "java.logging", "java.xml", "jdk.crypto.ec")
+
+            windows {
+                upgradeUuid =
+                    if (lunarTuneArch == "arm64") {
+                        "B2E6D3F1-7E4C-4F8B-AD29-3C6E9A1B5D72"
+                    } else {
+                        "A1F5C2E0-6D3B-4E7A-9C18-2B5D8F0A4C61"
+                    }
+                perUserInstall = true
+                shortcut = true
+                menu = true
+            }
         }
     }
 }

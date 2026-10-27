@@ -28,7 +28,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.LibraryMusic
+import androidx.compose.material.icons.rounded.List
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.CircularProgressIndicator
@@ -88,7 +88,7 @@ fun LunarTuneApp(
                         listOf(
                             Triple(Destination.HOME, "Home", Icons.Rounded.Home),
                             Triple(Destination.SEARCH, "Search", Icons.Rounded.Search),
-                            Triple(Destination.LIBRARY, "Library", Icons.Rounded.LibraryMusic),
+                            Triple(Destination.LIBRARY, "Library", Icons.Rounded.List),
                             Triple(Destination.SETTINGS, "Settings", Icons.Rounded.Settings),
                         )
                     entries.forEach { (target, label, icon) ->

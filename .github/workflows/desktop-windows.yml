@@ -26,7 +26,18 @@ on:
 
 jobs:
   windows:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            java_arch: x64
+          - arch: arm64
+            runner: windows-11-vs2026-arm
+            java_arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    name: Windows ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,14 +46,35 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
+          architecture: ${{ matrix.java_arch }}
       - uses: gradle/actions/setup-gradle@v4
-      - name: Compile and test the desktop target
-        run: .\gradlew.bat :desktop:compileKotlinDesktop :desktop:desktopTest --no-daemon
-      - name: Build Windows installers
-        run: .\gradlew.bat :desktop:packageExe :desktop:packageMsi --no-daemon
+
+      - name: Build ${{ matrix.arch }} installers
+        run: .\gradlew.bat :desktop:packageExe :desktop:packageMsi -PlunarTuneArch=${{ matrix.arch }} --no-daemon
+
+      - name: Name installers with architecture
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "desktop/build/compose/binaries/main/exe/*.exe" | Select-Object -First 1
+          if ($exe) { Move-Item $exe.FullName "desktop/build/compose/binaries/main/exe/LunarTune-5.2.0-${{ matrix.arch }}.exe" -Force }
+          $msi = Get-ChildItem "desktop/build/compose/binaries/main/msi/*.msi" | Select-Object -First 1
+          if ($msi) { Move-Item $msi.FullName "desktop/build/compose/binaries/main/msi/LunarTune-5.2.0-${{ matrix.arch }}.msi" -Force }
+
+      - name: Report installer sizes
+        shell: pwsh
+        run: |
+          Get-ChildItem "desktop/build/compose/binaries/main/exe/*.exe","desktop/build/compose/binaries/main/msi/*.msi" |
+            Select-Object Name, @{Name="MB";Expression={[math]::Round($_.Length/1MB,1)}} | Format-Table
+
+      # EXE and MSI are separate downloads, and each architecture is separate:
+      # four artifacts instead of one 354 MB bundle.
       - uses: actions/upload-artifact@v4
         with:
-          name: lunartune-windows-installers
-          path: |
-            desktop/build/compose/binaries/main/exe/*.exe
-            desktop/build/compose/binaries/main/msi/*.msi
+          name: lunartune-windows-${{ matrix.arch }}-exe
+          path: desktop/build/compose/binaries/main/exe/*.exe
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lunartune-windows-${{ matrix.arch }}-msi
+          path: desktop/build/compose/binaries/main/msi/*.msi
+          if-no-files-found: error

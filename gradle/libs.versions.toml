@@ -145,7 +145,7 @@ slf4j-nop = { module = "org.slf4j:slf4j-nop", version.ref = "slf4j" }
 cmp-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "cmpArtifacts" }
 cmp-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "cmpArtifacts" }
 cmp-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "cmpMaterial3" }
-cmp-icons = { module = "org.jetbrains.compose.material:material-icons-extended", version.ref = "cmpIcons" }
+cmp-icons = { module = "org.jetbrains.compose.material:material-icons-core", version.ref = "cmpIcons" }
 turbine = { module = "app.cash.turbine:turbine", version.ref = "turbine" }
 
 timber = { module = "com.jakewharton.timber:timber", version.ref = "timber" }
