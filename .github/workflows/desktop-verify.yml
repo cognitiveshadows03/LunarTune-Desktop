@@ -22,3 +22,13 @@ jobs:
         run: ./gradlew :desktop:compileKotlinDesktop --no-daemon
       - name: Run shared + desktop tests
         run: ./gradlew :desktop:desktopTest --no-daemon
+      - name: Report test results
+        if: always()
+        run: |
+          echo "Test suites (tests / failures / errors / skipped):"
+          grep -h '<testsuite ' desktop/build/test-results/desktopTest/*.xml || echo "No test result XML found"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: desktop-test-results
+          path: desktop/build/test-results/desktopTest
