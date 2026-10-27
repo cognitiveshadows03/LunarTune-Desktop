@@ -110,8 +110,17 @@ selects it locally; without the flag the build uses the current CPU.
 
 ### Size
 
-The first foundation build produced a 178 MB EXE plus a 178 MB MSI. The runtime
-classpath was 154 MB, dominated by three jars that were pure waste on Windows:
+The first foundation build produced a 178 MB EXE plus a 178 MB MSI in one
+353.9 MB artifact. After the changes below, each download is standalone:
+
+| Installer | Size |
+| --- | --- |
+| `LunarTune-5.2.0-x64.exe` / `.msi` | 100.5 / 100.3 MB |
+| `LunarTune-5.2.0-arm64.exe` / `.msi` | 98.0 / 97.8 MB |
+
+That is ~44% smaller per installer and ~72% smaller per download. The runtime
+classpath went from 154 MB to 76 MB, dominated before by three jars that were
+pure waste on Windows:
 
 - `skiko-awt-runtime-all` (42 MB) — natives for six platforms. `compose.desktop.currentOs`
   already supplies the exact OS/arch jar, so the all-platform jar is excluded.
