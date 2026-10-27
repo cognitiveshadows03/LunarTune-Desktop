@@ -32,7 +32,11 @@ dependencyResolutionManagement {
             filter {
                 includeGroup("com.github.therealbush")
                 includeGroup("com.github.TeamNewPipe")
+                // The lavaplayer fork is a multi-module build: its root POM points at
+                // sub-artifacts published under the com.github.walkyst.lavaplayer-fork
+                // group, so the whole group tree has to resolve from JitPack.
                 includeGroup("com.github.walkyst")
+                includeGroupByRegex("com\\.github\\.walkyst\\..*")
             }
         }
     }
