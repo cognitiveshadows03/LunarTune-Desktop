@@ -2,36 +2,77 @@ import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-    id("org.jetbrains.kotlin.jvm")
-    id("org.jetbrains.compose")
-    id("org.jetbrains.kotlin.plugin.compose")
+    alias(libs.plugins.kotlin.multiplatform)
+    alias(libs.plugins.compose.multiplatform)
+    alias(libs.plugins.compose.compiler)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 group = "dev.citali.lunartune"
 version = "5.2.0-desktop-alpha"
 
 kotlin {
-    compilerOptions.jvmTarget.set(JvmTarget.JVM_17)
-}
+    jvm("desktop") {
+        compilerOptions.jvmTarget.set(JvmTarget.JVM_21)
+    }
 
-dependencies {
-    implementation(compose.desktop.currentOs)
-    implementation(compose.runtime)
-    implementation(compose.foundation)
-    implementation(compose.material3)
-    implementation(compose.materialIconsExtended)
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
-    // VIVI Desktop's JVM playback foundation; LunarTune's stream resolver and queue
-    // will be connected to this boundary in the next desktop-port increment.
-    implementation("com.github.walkyst:lavaplayer-fork:1.4.3")
-    runtimeOnly("org.slf4j:slf4j-nop:2.0.17")
+    sourceSets {
+        // Explicit coordinates: the shorthand compose.* accessors are deprecated
+        // with ERROR level in recent Compose Multiplatform releases.
+        val commonMain by getting {
+            dependencies {
+                implementation(libs.cmp.runtime)
+                implementation(libs.cmp.foundation)
+                implementation(libs.cmp.material3)
+                implementation(libs.cmp.icons)
+                implementation(libs.kotlinx.coroutines.core)
+            }
+        }
+
+        val commonTest by getting {
+            dependencies {
+                implementation(kotlin("test"))
+            }
+        }
+
+        val desktopMain by getting {
+            dependencies {
+                implementation(compose.desktop.currentOs)
+                implementation(libs.kotlinx.coroutines.swing)
+                implementation(libs.kotlinx.serialization.json)
+                implementation(libs.ktor.client.core)
+                implementation(libs.ktor.client.okhttp)
+                implementation(libs.lavaplayer.fork)
+                runtimeOnly(libs.slf4j.nop)
+
+                // Exactly the same pure-JVM libraries the Android app uses: the
+                // InnerTube/YouTube client and every lyrics provider.
+                implementation(project(":core"))
+                implementation(project(":morideobfuscator"))
+                implementation(project(":lyrics:betterlyrics"))
+                implementation(project(":lyrics:kugou"))
+                implementation(project(":lyrics:lrclib"))
+                implementation(project(":lyrics:simpmusic"))
+                implementation(project(":lyrics:paxsenix"))
+                implementation(project(":lyrics:unison"))
+                implementation(project(":lyrics:youlyplus"))
+            }
+        }
+
+        val desktopTest by getting {
+            dependencies {
+                implementation(libs.junit)
+            }
+        }
+    }
 }
 
 compose.desktop {
     application {
         mainClass = "dev.citali.lunartune.desktop.MainKt"
+
         nativeDistributions {
-            targetFormats(TargetFormat.Exe, TargetFormat.Msi)
+            targetFormats(TargetFormat.Exe, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Dmg)
             packageName = "LunarTune"
             packageVersion = "5.2.0"
             description = "LunarTune desktop music client"

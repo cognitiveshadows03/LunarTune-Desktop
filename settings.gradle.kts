@@ -11,6 +11,7 @@ pluginManagement {
         }
         mavenCentral()
         gradlePluginPortal()
+        maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
     }
 }
 
@@ -19,11 +20,8 @@ dependencyResolutionManagement {
 
     repositories {
         google()
-        mavenCentral {
-            mavenContent {
-                releasesOnly()
-            }
-        }
+        mavenCentral()
+        maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
         exclusiveContent {
             forRepository {
                 maven {
@@ -34,20 +32,21 @@ dependencyResolutionManagement {
             filter {
                 includeGroup("com.github.therealbush")
                 includeGroup("com.github.TeamNewPipe")
+                includeGroup("com.github.walkyst")
             }
         }
     }
 }
 
-// F-Droid doesn't support foojay-resolver plugin
-// plugins {
-//     id("org.gradle.toolchains.foojay-resolver-convention") version("1.0.0")
-// }
-
 rootProject.name = "LunarTune"
-include(":app")
+
+// Desktop-focused build. Only the Compose Multiplatform app and the pure-JVM
+// libraries it shares with the Android app are configured here; the Android app
+// sources kept in this repository are reference material and deliberately stay
+// out of the Gradle build so a desktop compile needs no Android SDK.
 include(":desktop")
 include(":core")
+include(":morideobfuscator")
 include(":lyrics:kugou")
 include(":lyrics:lrclib")
 include(":lyrics:simpmusic")
@@ -55,24 +54,3 @@ include(":lyrics:paxsenix")
 include(":lyrics:betterlyrics")
 include(":lyrics:unison")
 include(":lyrics:youlyplus")
-include(":lastfm")
-include(":canvas")
-include(":shazamkit")
-include(":spotifycore")
-include(":morideobfuscator")
-
-// Use a local copy of NewPipe Extractor by uncommenting the lines below.
-// We assume, that LunarTune and NewPipe Extractor have the same parent directory.
-// If this is not the case, please change the path in includeBuild().
-//
-// For this to work you also need to change the implementation in core/build.gradle.kts
-// to one which does not specify a version.
-// From:
-//      implementation(libs.newpipe.extractor)
-// To:
-//      implementation("com.github.TeamNewPipe:NewPipeExtractor")
-// includeBuild("../NewPipeExtractor") {
-//    dependencySubstitution {
-//        substitute(module("com.github.TeamNewPipe:NewPipeExtractor")).using(project(":extractor"))
-//    }
-// }

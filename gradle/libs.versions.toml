@@ -2,9 +2,16 @@
 agp = "9.2.1"
 annotation = "1.10.0"
 json = "20250517"
-kotlin = "2.4.0"
-kotlinMetadata = "2.4.0"
+kotlin = "2.4.21"
+kotlinMetadata = "2.4.21"
+kotlinxSerialization = "1.10.0"
 compose = "1.12.0-beta02"
+composeMultiplatform = "1.12.2"
+cmpArtifacts = "1.12.2"
+cmpMaterial3 = "1.13.0-alpha02"
+cmpIcons = "1.7.3"
+lavaplayer = "1.4.3"
+slf4j = "2.0.17"
 lifecycle = "2.11.0"
 material3 = "1.5.0-alpha23"
 media3 = "1.10.1"
@@ -130,6 +137,15 @@ rhino = { module = "org.mozilla:rhino", version.ref = "rhino" }
 desugaring = { module = "com.android.tools:desugar_jdk_libs", version.ref = "desugaring" }
 
 junit = { module = "junit:junit", version.ref = "junit" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutinesGuava" }
+kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "coroutinesGuava" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+lavaplayer-fork = { module = "com.github.walkyst:lavaplayer-fork", version.ref = "lavaplayer" }
+slf4j-nop = { module = "org.slf4j:slf4j-nop", version.ref = "slf4j" }
+cmp-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "cmpArtifacts" }
+cmp-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "cmpArtifacts" }
+cmp-material3 = { module = "org.jetbrains.compose.material3:material3", version.ref = "cmpMaterial3" }
+cmp-icons = { module = "org.jetbrains.compose.material:material-icons-extended", version.ref = "cmpIcons" }
 turbine = { module = "app.cash.turbine:turbine", version.ref = "turbine" }
 
 timber = { module = "com.jakewharton.timber:timber", version.ref = "timber" }
@@ -165,3 +181,5 @@ kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 aboutlibraries-android = { id = "com.mikepenz.aboutlibraries.plugin.android", version.ref = "aboutLibraries" }
+kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "composeMultiplatform" }
