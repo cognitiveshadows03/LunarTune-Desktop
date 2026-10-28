@@ -49,8 +49,43 @@ jobs:
           architecture: ${{ matrix.java_arch }}
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Build ${{ matrix.arch }} installers
-        run: .\gradlew.bat :desktop:packageExe :desktop:packageMsi -PlunarTuneArch=${{ matrix.arch }} --no-daemon
+      # createDistributable produces the unpacked app image (launcher + jlink
+      # runtime + jars). CI zips it as the portable download.
+      - name: Build ${{ matrix.arch }} installers and portable image
+        run: .\gradlew.bat :desktop:packageExe :desktop:packageMsi :desktop:createDistributable -PlunarTuneArch=${{ matrix.arch }} --no-daemon
+
+      # A green build says nothing about the packaged jlink runtime: jpackage's
+      # native launcher is the only thing that reports "Failed to launch JVM".
+      # The app's --launch-check path loads representative classes from the JDK
+      # modules the UI needs, writes a marker and exits without opening a window.
+      - name: Verify the packaged runtime launches
+        shell: pwsh
+        run: |
+          $appRoot = Get-ChildItem "desktop/build/compose/binaries/main/app" -Directory -ErrorAction Stop | Select-Object -First 1
+          if (-not $appRoot) { throw "createDistributable produced no app image" }
+          $exe = Get-ChildItem $appRoot.FullName -Filter "*.exe" | Select-Object -First 1
+          if (-not $exe) { throw "No launcher inside $($appRoot.FullName)" }
+          $marker = Join-Path (Get-Location) "launch-check.txt"
+          $out = Join-Path $env:RUNNER_TEMP "lunartune-launch-check.out"
+          $err = Join-Path $env:RUNNER_TEMP "lunartune-launch-check.err"
+          Remove-Item $marker -ErrorAction SilentlyContinue
+          $arg = '--launch-check="' + $marker + '"'
+          Write-Host "Running $($exe.FullName) $arg"
+          $p = Start-Process -FilePath $exe.FullName -ArgumentList $arg -PassThru -RedirectStandardOutput $out -RedirectStandardError $err -WindowStyle Hidden
+          if (-not $p.WaitForExit(90000)) {
+            $p.Kill()
+            throw "Packaged launcher did not finish the launch check within 90s"
+          }
+          Write-Host "exit=$($p.ExitCode)"
+          Get-Content $out -ErrorAction SilentlyContinue
+          Get-Content $err -ErrorAction SilentlyContinue
+          if ($p.ExitCode -ne 0) { throw "Packaged launcher exited with $($p.ExitCode)" }
+          if (-not (Test-Path $marker)) { throw "Launch check marker missing: the JVM never reached main()" }
+          $report = Get-Content $marker -Raw
+          Write-Host "Launch check: $report"
+          if ($report -match 'missing=') { throw "Packaged runtime is missing JDK modules: $report" }
+          if ($report -notlike 'LUNARTUNE_LAUNCH_CHECK_OK*') { throw "Unexpected launch check report: $report" }
+          Remove-Item $marker -ErrorAction SilentlyContinue
 
       - name: Name installers with architecture
         shell: pwsh
@@ -60,14 +95,28 @@ jobs:
           $msi = Get-ChildItem "desktop/build/compose/binaries/main/msi/*.msi" | Select-Object -First 1
           if ($msi) { Move-Item $msi.FullName "desktop/build/compose/binaries/main/msi/LunarTune-5.2.0-${{ matrix.arch }}.msi" -Force }
 
+      - name: Zip portable build
+        shell: pwsh
+        run: |
+          $appRoot = Get-ChildItem "desktop/build/compose/binaries/main/app" -Directory | Select-Object -First 1
+          if (-not $appRoot) { throw "No app image to zip" }
+          $zip = "desktop/build/compose/binaries/main/LunarTune-5.2.0-${{ matrix.arch }}-portable.zip"
+          Remove-Item $zip -ErrorAction SilentlyContinue
+          # bsdtar ships with Windows; fall back to Compress-Archive if absent.
+          tar.exe -a -cf $zip -C "desktop/build/compose/binaries/main/app" $appRoot.Name
+          if ($LASTEXITCODE -ne 0) {
+            Compress-Archive -Path $appRoot.FullName -DestinationPath $zip -CompressionLevel Optimal
+          }
+          if (-not (Test-Path $zip)) { throw "Portable zip was not created" }
+
       - name: Report installer sizes
         shell: pwsh
         run: |
-          Get-ChildItem "desktop/build/compose/binaries/main/exe/*.exe","desktop/build/compose/binaries/main/msi/*.msi" |
+          Get-ChildItem "desktop/build/compose/binaries/main/exe/*.exe","desktop/build/compose/binaries/main/msi/*.msi","desktop/build/compose/binaries/main/*.zip" |
             Select-Object Name, @{Name="MB";Expression={[math]::Round($_.Length/1MB,1)}} | Format-Table
 
-      # EXE and MSI are separate downloads, and each architecture is separate:
-      # four artifacts instead of one 354 MB bundle.
+      # EXE and MSI are separate downloads, and each architecture is separate.
+      # The portable zip is a third, installer-free option for each architecture.
       - uses: actions/upload-artifact@v4
         with:
           name: lunartune-windows-${{ matrix.arch }}-exe
@@ -77,4 +126,9 @@ jobs:
         with:
           name: lunartune-windows-${{ matrix.arch }}-msi
           path: desktop/build/compose/binaries/main/msi/*.msi
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lunartune-windows-${{ matrix.arch }}-portable
+          path: desktop/build/compose/binaries/main/*-portable.zip
           if-no-files-found: error

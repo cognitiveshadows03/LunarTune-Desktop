@@ -91,16 +91,22 @@ compose.desktop {
         mainClass = "dev.citali.lunartune.desktop.MainKt"
 
         nativeDistributions {
+            // createDistributable builds the unpacked app image independently of
+            // this list; CI zips it as the portable download alongside EXE/MSI.
             targetFormats(TargetFormat.Exe, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Dmg)
             packageName = "LunarTune"
             packageVersion = "5.2.0"
             description = "LunarTune desktop music client"
             vendor = "LunarTune contributors"
 
-            // Ship a jlink runtime instead of a whole JDK. java.desktop pulls in
-            // java.xml (used by the bundled TTML DOM parser) transitively.
-            includeAllModules = false
-            modules("java.base", "java.desktop", "java.logging", "java.xml", "jdk.crypto.ec")
+            // The jlink image is jpackage's --runtime-image. Compose cannot infer
+            // which JDK modules an app needs, and anything missing only shows up at
+            // runtime as the launcher's "Failed to launch JVM" - a green build tells
+            // you nothing. Skiko needs jdk.unsupported, AWT on Windows can need
+            // jdk.accessibility, the lyrics libraries reach for java.sql/java.naming,
+            // and jdeps cannot see reflection. Ship the complete module set; the
+            // classpath exclusions above still keep most of the size saving.
+            includeAllModules = true
 
             windows {
                 upgradeUuid =

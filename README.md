@@ -91,18 +91,24 @@ Practical workarounds without a key:
    three endpoints.
 5. Contribute lyrics yourself at [unison.boidu.dev](https://unison.boidu.dev/).
 
-## Windows installers
+## Windows downloads
 
-CI publishes **four separate artifacts** (EXE and MSI, each for x64 and arm64),
-so a user downloads one installer instead of a 354 MB bundle containing both
-formats:
+CI publishes **six separate artifacts**: an EXE installer, an MSI installer and
+a portable ZIP, each for x64 and arm64. A user downloads one file instead of a
+354 MB bundle containing everything.
 
 | Artifact | Contents |
 | --- | --- |
 | `lunartune-windows-x64-exe` | `LunarTune-5.2.0-x64.exe` |
 | `lunartune-windows-x64-msi` | `LunarTune-5.2.0-x64.msi` |
+| `lunartune-windows-x64-portable` | `LunarTune-5.2.0-x64-portable.zip` |
 | `lunartune-windows-arm64-exe` | `LunarTune-5.2.0-arm64.exe` |
 | `lunartune-windows-arm64-msi` | `LunarTune-5.2.0-arm64.msi` |
+| `lunartune-windows-arm64-portable` | `LunarTune-5.2.0-arm64-portable.zip` |
+
+The portable ZIP is the unpacked app image (`createDistributable`): unzip it
+anywhere and run `LunarTune/LunarTune.exe`. It bundles the same runtime as the
+installers, needs no Java installed and writes no registry entries.
 
 x64 builds on `windows-latest`, arm64 builds natively on `windows-11-vs2026-arm`.
 Each architecture has its own MSI upgrade code. `-PlunarTuneArch=x64|arm64`
@@ -129,11 +135,20 @@ pure waste on Windows:
 - optional lavaplayer modules (`test-samples`, `ext-format-xm`, `stream-merger`,
   `ext-youtube-rotator`) — excluded.
 
-Packaging uses a jlink runtime (`includeAllModules = false`,
-`java.base/java.desktop/java.logging/java.xml/jdk.crypto.ec`) instead of a full
-JDK. `java.xml` is required by the bundled TTML DOM parser and comes in via
-`java.desktop`. CI prints each installer's size in the "Report installer sizes"
-step, so regressions are visible in the build log.
+Those measurements were taken with a five-module jlink runtime. That runtime was
+too small: the packaged launcher failed with **Failed to launch JVM** because
+Compose cannot infer the JDK modules an app needs, and a missing one only shows
+up at runtime (Skiko needs `jdk.unsupported`, AWT on Windows can need
+`jdk.accessibility`, the lyrics libraries reach for `java.sql`/`java.naming`,
+and jdeps cannot see reflection). Packaging now uses `includeAllModules = true`.
+The classpath exclusions above are kept, so this trades some of the earlier size
+saving for a build that actually starts.
+
+Every Windows job also runs the packaged `LunarTune.exe --launch-check=<file>`.
+That path loads representative classes from the JDK modules the UI needs, writes
+a marker and exits without opening a window, so a broken runtime fails CI instead
+of shipping a green build that will not launch. CI prints each download's size in
+the "Report installer sizes" step.
 
 > Note: `lavaplayer-natives-fork` (26 MB) is kept as-is for safety. It has no
 > `win-aarch64` native, so the arm64 build falls back to pure-Java decoding;
