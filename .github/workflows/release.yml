@@ -37,36 +37,8 @@ jobs:
           architecture: ${{ matrix.java_arch }}
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Build app image
-        run: .\gradlew.bat :desktop:createDistributable -PlunarTuneArch=${{ matrix.arch }} --no-daemon
-
-      - name: Re-jlink runtime with --strip-debug
-        shell: pwsh
-        run: |
-          $appRoot = Get-ChildItem "desktop/build/compose/binaries/main/app" -Directory | Select-Object -First 1
-          $runtimeDir = Join-Path $appRoot.FullName "runtime"
-          if (-not (Test-Path $runtimeDir)) { Write-Host "No runtime dir, skipping"; exit 0 }
-          $releaseFile = Join-Path $runtimeDir "release"
-          if (-not (Test-Path $releaseFile)) { Write-Host "No release file, skipping"; exit 0 }
-          $modulesLine = (Get-Content $releaseFile | Where-Object { $_ -match '^MODULES=' })
-          $modules = ($modulesLine -replace '^MODULES=', '' -replace '"', '').Trim() -replace ' ', ','
-          $jlink = Join-Path $env:JAVA_HOME "bin\jlink.exe"
-          $newDir = "$runtimeDir.stripped"
-          & $jlink --strip-debug --no-header-files --no-man-pages `
-            --module-path (Join-Path $env:JAVA_HOME "jmods") `
-            --add-modules $modules `
-            --output $newDir 2>&1
-          if ($LASTEXITCODE -eq 0 -and (Test-Path $newDir)) {
-            Remove-Item $runtimeDir -Recurse -Force
-            Rename-Item $newDir $runtimeDir
-            Write-Host "Re-jlinked runtime with --strip-debug"
-          } else {
-            Write-Host "Re-jlink failed, keeping original runtime"
-            if (Test-Path $newDir) { Remove-Item $newDir -Recurse -Force }
-          }
-
-      - name: Build installers from stripped image
-        run: .\gradlew.bat :desktop:packageExe :desktop:packageMsi -PlunarTuneArch=${{ matrix.arch }} --no-daemon
+      - name: Build installers and app image
+        run: .\gradlew.bat :desktop:packageExe :desktop:packageMsi :desktop:createDistributable -PlunarTuneArch=${{ matrix.arch }} --no-daemon
 
       - name: Name installers with architecture
         shell: pwsh
@@ -76,16 +48,31 @@ jobs:
           $msi = Get-ChildItem "desktop/build/compose/binaries/main/msi/*.msi" | Select-Object -First 1
           if ($msi) { Move-Item $msi.FullName "desktop/build/compose/binaries/main/msi/LunarTune-5.2.0-${{ matrix.arch }}.msi" -Force }
 
-      - name: Strip debug symbols from bundled DLLs (portable only)
+      - name: Strip and UPX-compress DLLs (portable only)
         shell: pwsh
         run: |
           $appRoot = Get-ChildItem "desktop/build/compose/binaries/main/app" -Directory | Select-Object -First 1
-          if (-not $appRoot) { Write-Host "No app image found, skipping strip"; exit 0 }
+          if (-not $appRoot) { Write-Host "No app image found, skipping"; exit 0 }
+          $before = (Get-ChildItem $appRoot.FullName -Recurse -File | Measure-Object -Property Length -Sum).Sum
           $strip = "C:\Program Files\Git\usr\bin\strip.exe"
-          if (-not (Test-Path $strip)) { Write-Host "strip.exe not found, skipping"; exit 0 }
-          Get-ChildItem $appRoot.FullName -Recurse -Filter "*.dll" | ForEach-Object {
-            & $strip --strip-unneeded $_.FullName 2>$null
+          if (Test-Path $strip) {
+            Get-ChildItem $appRoot.FullName -Recurse -Filter "*.dll" | ForEach-Object {
+              & $strip --strip-unneeded $_.FullName 2>$null
+            }
           }
+          $upxUrl = "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-win64.zip"
+          try {
+            Invoke-WebRequest -Uri $upxUrl -OutFile "upx.zip" -ErrorAction Stop
+            Expand-Archive "upx.zip" -DestinationPath "upx" -Force
+            $upx = Get-ChildItem "upx" -Recurse -Filter "upx.exe" | Select-Object -First 1
+            if ($upx) {
+              Get-ChildItem $appRoot.FullName -Recurse -Filter "*.dll" | ForEach-Object {
+                & $upx.FullName --best --lzma $_.FullName 2>$null
+              }
+            }
+          } catch { Write-Host "UPX download failed, skipping" }
+          $after = (Get-ChildItem $appRoot.FullName -Recurse -File | Measure-Object -Property Length -Sum).Sum
+          Write-Host "App image: $([math]::Round($before/1MB,1)) MB -> $([math]::Round($after/1MB,1)) MB (strip + UPX)"
 
       - name: Zip portable build (max compression)
         shell: pwsh
@@ -119,45 +106,46 @@ jobs:
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Build app image
-        run: ./gradlew :desktop:createDistributable -PlunarTuneArch=x64 --no-daemon
+      - name: Build app image and deb
+        run: ./gradlew :desktop:createDistributable :desktop:packageDeb -PlunarTuneArch=x64 --no-daemon
 
-      - name: Re-jlink runtime with --strip-debug
-        run: |
-          runtime_dir=$(find desktop/build/compose/binaries/main/app -type d -name "runtime" | head -1)
-          if [ -z "$runtime_dir" ]; then echo "No runtime dir found, skipping"; exit 0; fi
-          modules=$(grep "^MODULES=" "$runtime_dir/release" | sed 's/^MODULES=//' | tr -d '"' | tr ' ' ',')
-          new_dir="${runtime_dir}.stripped"
-          "$JAVA_HOME/bin/jlink" \
-            --strip-debug --no-header-files --no-man-pages \
-            --module-path "$JAVA_HOME/jmods" \
-            --add-modules "$modules" \
-            --output "$new_dir" 2>&1
-          if [ $? -eq 0 ] && [ -d "$new_dir" ]; then
-            rm -rf "$runtime_dir"
-            mv "$new_dir" "$runtime_dir"
-            echo "Re-jlinked runtime with --strip-debug"
-          else
-            echo "Re-jlink failed, keeping original runtime"
-            rm -rf "$new_dir"
-          fi
-
-      - name: Strip debug symbols from native libraries
+      - name: Strip and UPX-compress native libraries
         run: |
           app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
+          if [ -z "$app_root" ]; then echo "No app image found"; exit 1; fi
+          before=$(du -sh "$app_root" | cut -f1)
           find "$app_root" -type f -name "*.so" -exec strip --strip-all {} \; 2>/dev/null || true
-          find "$app_root" -type f -name "*.debuginfo" -delete 2>/dev/null || true
+          sudo apt-get install -y upx-ucl 2>/dev/null || true
+          if command -v upx &>/dev/null; then
+            find "$app_root" -type f -name "*.so" -exec upx --best --lzma {} \; 2>/dev/null || true
+          fi
+          after=$(du -sh "$app_root" | cut -f1)
+          echo "App image: $before -> $after (strip + UPX)"
 
-      - name: Build deb installer from compressed image
-        run: ./gradlew :desktop:packageDeb -PlunarTuneArch=x64 --no-daemon
-
-      - name: Build portable tarball (xz -9e)
+      - name: Build portable tarball (xz -9e) and recompress deb
         run: |
           app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
           base=$(basename "$app_root")
           tar -cf - -C "$(dirname "$app_root")" "$base" | xz -9e > "desktop/build/compose/binaries/main/LunarTune-5.2.0-x64-portable.tar.xz"
+          # Recompress deb data.tar.gz as data.tar.xz
           deb=$(find desktop/build/compose/binaries/main/deb -name "*.deb" | head -n1)
-          if [ -n "$deb" ]; then mv "$deb" "desktop/build/compose/binaries/main/deb/LunarTune-5.2.0-x64.deb"; fi
+          if [ -n "$deb" ]; then
+            tmp=$(mktemp -d)
+            cp "$deb" "$tmp/orig.deb"
+            cd "$tmp"
+            ar x orig.deb
+            if [ -f data.tar.gz ]; then
+              zcat data.tar.gz | xz -9e > data.tar.xz
+              rm data.tar.gz
+              ar rcs new.deb debian-binary control.tar.gz data.tar.xz 2>/dev/null || \
+                ar rcs new.deb debian-binary control.tar.xz data.tar.xz 2>/dev/null || true
+              if [ -f new.deb ] && [ $(stat -c%s new.deb) -lt $(stat -c%s orig.deb) ]; then
+                cp new.deb "$deb"
+              fi
+            fi
+            rm -rf "$tmp"
+            mv "$deb" "desktop/build/compose/binaries/main/deb/LunarTune-5.2.0-x64.deb"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:

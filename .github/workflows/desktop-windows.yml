@@ -49,45 +49,8 @@ jobs:
           architecture: ${{ matrix.java_arch }}
       - uses: gradle/actions/setup-gradle@v4
 
-      # Build the app image first, then re-jlink the runtime with --strip-debug
-      # before building the installers. This way .exe, .msi and portable zip all
-      # benefit from the stripped runtime (typically 15-20% smaller). We use
-      # --strip-debug only, not --compress=2, because pre-compressing the runtime
-      # conflicts with the archive compression (zip/LZX achieves better ratio on
-      # uncompressed class files than on jlink-compressed ones).
-      - name: Build app image
-        run: .\gradlew.bat :desktop:createDistributable -PlunarTuneArch=${{ matrix.arch }} --no-daemon
-
-      - name: Re-jlink runtime with --strip-debug
-        shell: pwsh
-        run: |
-          $appRoot = Get-ChildItem "desktop/build/compose/binaries/main/app" -Directory | Select-Object -First 1
-          $runtimeDir = Join-Path $appRoot.FullName "runtime"
-          if (-not (Test-Path $runtimeDir)) { Write-Host "No runtime dir, skipping"; exit 0 }
-          $releaseFile = Join-Path $runtimeDir "release"
-          if (-not (Test-Path $releaseFile)) { Write-Host "No release file, skipping"; exit 0 }
-          $modulesLine = (Get-Content $releaseFile | Where-Object { $_ -match '^MODULES=' })
-          $modules = ($modulesLine -replace '^MODULES=', '' -replace '"', '').Trim() -replace ' ', ','
-          Write-Host "Modules: $modules"
-          $jlink = Join-Path $env:JAVA_HOME "bin\jlink.exe"
-          $newDir = "$runtimeDir.stripped"
-          $before = (Get-ChildItem $runtimeDir -Recurse -File | Measure-Object -Property Length -Sum).Sum
-          & $jlink --strip-debug --no-header-files --no-man-pages `
-            --module-path (Join-Path $env:JAVA_HOME "jmods") `
-            --add-modules $modules `
-            --output $newDir 2>&1
-          if ($LASTEXITCODE -eq 0 -and (Test-Path $newDir)) {
-            Remove-Item $runtimeDir -Recurse -Force
-            Rename-Item $newDir $runtimeDir
-            $after = (Get-ChildItem $runtimeDir -Recurse -File | Measure-Object -Property Length -Sum).Sum
-            Write-Host "Runtime: $([math]::Round($before/1MB,1)) MB -> $([math]::Round($after/1MB,1)) MB (with --strip-debug)"
-          } else {
-            Write-Host "Re-jlink failed, keeping original runtime"
-            if (Test-Path $newDir) { Remove-Item $newDir -Recurse -Force }
-          }
-
-      - name: Build installers from stripped image
-        run: .\gradlew.bat :desktop:packageExe :desktop:packageMsi -PlunarTuneArch=${{ matrix.arch }} --no-daemon
+      - name: Build installers and app image
+        run: .\gradlew.bat :desktop:packageExe :desktop:packageMsi :desktop:createDistributable -PlunarTuneArch=${{ matrix.arch }} --no-daemon
 
       # A green build says nothing about the packaged jlink runtime: jpackage's
       # native launcher is the only thing that reports "Failed to launch JVM".
@@ -130,24 +93,37 @@ jobs:
           $msi = Get-ChildItem "desktop/build/compose/binaries/main/msi/*.msi" | Select-Object -First 1
           if ($msi) { Move-Item $msi.FullName "desktop/build/compose/binaries/main/msi/LunarTune-5.2.0-${{ matrix.arch }}.msi" -Force }
 
-      # The .exe and .msi installers are built by jpackage from the app image
-      # in the gradle invocation above, so they already benefit from the curated
-      # jlink module list. The portable zip is built from the same app image
-      # below; we strip debug symbols from the bundled DLLs first to shave a few
-      # more MB off the archive. strip.exe ships with Git for Windows (MSYS2).
-      - name: Strip debug symbols from bundled runtime (portable only)
+      # Strip debug symbols from DLLs, then UPX-compress them. UPX achieves
+      # 40-60% compression on native libraries (Skiko, lavaplayer codecs) — the
+      # single biggest size win after the module curation. This only affects the
+      # portable zip; the .exe/.msi were already built from the unstripped image.
+      - name: Strip and UPX-compress DLLs (portable only)
         shell: pwsh
         run: |
           $appRoot = Get-ChildItem "desktop/build/compose/binaries/main/app" -Directory | Select-Object -First 1
-          if (-not $appRoot) { Write-Host "No app image found, skipping strip"; exit 0 }
-          $strip = "C:\Program Files\Git\usr\bin\strip.exe"
-          if (-not (Test-Path $strip)) { Write-Host "strip.exe not found, skipping"; exit 0 }
+          if (-not $appRoot) { Write-Host "No app image found, skipping"; exit 0 }
           $before = (Get-ChildItem $appRoot.FullName -Recurse -File | Measure-Object -Property Length -Sum).Sum
-          Get-ChildItem $appRoot.FullName -Recurse -Filter "*.dll" | ForEach-Object {
-            & $strip --strip-unneeded $_.FullName 2>$null
+          # Strip debug symbols.
+          $strip = "C:\Program Files\Git\usr\bin\strip.exe"
+          if (Test-Path $strip) {
+            Get-ChildItem $appRoot.FullName -Recurse -Filter "*.dll" | ForEach-Object {
+              & $strip --strip-unneeded $_.FullName 2>$null
+            }
           }
+          # Download and run UPX on DLLs.
+          $upxUrl = "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-win64.zip"
+          try {
+            Invoke-WebRequest -Uri $upxUrl -OutFile "upx.zip" -ErrorAction Stop
+            Expand-Archive "upx.zip" -DestinationPath "upx" -Force
+            $upx = Get-ChildItem "upx" -Recurse -Filter "upx.exe" | Select-Object -First 1
+            if ($upx) {
+              Get-ChildItem $appRoot.FullName -Recurse -Filter "*.dll" | ForEach-Object {
+                & $upx.FullName --best --lzma $_.FullName 2>$null
+              }
+            }
+          } catch { Write-Host "UPX download failed, skipping" }
           $after = (Get-ChildItem $appRoot.FullName -Recurse -File | Measure-Object -Property Length -Sum).Sum
-          Write-Host "App image: $([math]::Round($before/1MB,1)) MB -> $([math]::Round($after/1MB,1)) MB"
+          Write-Host "App image: $([math]::Round($before/1MB,1)) MB -> $([math]::Round($after/1MB,1)) MB (strip + UPX)"
 
       - name: Zip portable build (max compression)
         shell: pwsh

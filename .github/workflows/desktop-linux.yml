@@ -38,61 +38,61 @@ jobs:
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Build app image
-        run: ./gradlew :desktop:createDistributable -PlunarTuneArch=x64 --no-daemon
+      - name: Build app image and deb
+        run: ./gradlew :desktop:createDistributable :desktop:packageDeb -PlunarTuneArch=x64 --no-daemon
 
-      # Re-jlink the bundled runtime with --strip-debug. Compose Multiplatform's
-      # jlink invocation doesn't pass --strip-debug, so class-file debug info ships
-      # in the runtime. We rebuild from the same module list (read from the release
-      # file) with --strip-debug, which typically cuts 15-20% off the runtime
-      # without conflicting with the archive compression (xz/gzip/zip compress the
-      # stripped image better than a pre-compressed --compress=2 image).
-      - name: Re-jlink runtime with --strip-debug
-        run: |
-          runtime_dir=$(find desktop/build/compose/binaries/main/app -type d -name "runtime" | head -1)
-          if [ -z "$runtime_dir" ]; then echo "No runtime dir found, skipping"; exit 0; fi
-          modules=$(grep "^MODULES=" "$runtime_dir/release" | sed 's/^MODULES=//' | tr -d '"' | tr ' ' ',')
-          echo "Modules: $modules"
-          new_dir="${runtime_dir}.stripped"
-          before=$(du -sh "$runtime_dir" | cut -f1)
-          "$JAVA_HOME/bin/jlink" \
-            --strip-debug \
-            --no-header-files \
-            --no-man-pages \
-            --module-path "$JAVA_HOME/jmods" \
-            --add-modules "$modules" \
-            --output "$new_dir" 2>&1
-          if [ $? -eq 0 ] && [ -d "$new_dir" ]; then
-            rm -rf "$runtime_dir"
-            mv "$new_dir" "$runtime_dir"
-            after=$(du -sh "$runtime_dir" | cut -f1)
-            echo "Runtime: $before -> $after (with --strip-debug)"
-          else
-            echo "Re-jlink failed, keeping original runtime"
-            rm -rf "$new_dir"
-          fi
-
-      - name: Strip debug symbols from native libraries
+      # Strip debug symbols from native libraries, then UPX-compress them.
+      # UPX achieves 40-60% compression on .so files (Skiko, lavaplayer native
+      # codecs) — the single biggest size win after the module curation.
+      - name: Strip and UPX-compress native libraries
         run: |
           app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
           if [ -z "$app_root" ]; then echo "No app image found"; exit 1; fi
           before=$(du -sh "$app_root" | cut -f1)
+          # Strip debug symbols.
           find "$app_root" -type f -name "*.so" -exec strip --strip-all {} \; 2>/dev/null || true
-          find "$app_root" -type f -name "*.debuginfo" -delete 2>/dev/null || true
+          # Install and run UPX on every .so.
+          sudo apt-get install -y upx-ucl 2>/dev/null || true
+          if command -v upx &>/dev/null; then
+            find "$app_root" -type f -name "*.so" -exec upx --best --lzma {} \; 2>/dev/null || true
+          fi
           after=$(du -sh "$app_root" | cut -f1)
-          echo "App image: $before -> $after (after strip)"
-
-      - name: Build deb installer from compressed image
-        run: ./gradlew :desktop:packageDeb -PlunarTuneArch=x64 --no-daemon
+          echo "App image: $before -> $after (strip + UPX)"
 
       - name: Build portable tarball (xz -9e)
         run: |
           app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
           base=$(basename "$app_root")
           out="desktop/build/compose/binaries/main/LunarTune-5.2.0-x64-portable.tar.xz"
-          # xz -9e (extreme) squeezes the JVM runtime harder than tar's default -J (level 6).
           tar -cf - -C "$(dirname "$app_root")" "$base" | xz -9e > "$out"
           ls -lh "$out"
+
+      # Recompress the .deb's data.tar from gzip to xz. dpkg has supported
+      # data.tar.xz since Debian jessie; xz is ~15% smaller than gzip on JVM
+      # runtimes.
+      - name: Recompress deb with xz
+        run: |
+          deb=$(find desktop/build/compose/binaries/main/deb -name "*.deb" | head -n1)
+          if [ -z "$deb" ]; then echo "No deb found"; exit 0; fi
+          before=$(du -h "$deb" | cut -f1)
+          tmp=$(mktemp -d)
+          cp "$deb" "$tmp/orig.deb"
+          cd "$tmp"
+          ar x orig.deb
+          if [ -f data.tar.gz ]; then
+            zcat data.tar.gz | xz -9e > data.tar.xz
+            rm data.tar.gz
+            ar rcs new.deb debian-binary control.tar.gz data.tar.xz 2>/dev/null || \
+              ar rcs new.deb debian-binary control.tar.xz data.tar.xz 2>/dev/null || true
+            if [ -f new.deb ] && [ $(stat -c%s new.deb) -lt $(stat -c%s orig.deb) ]; then
+              cp new.deb "$deb"
+              after=$(du -h "$deb" | cut -f1)
+              echo "Deb: $before -> $after (gzip -> xz)"
+            else
+              echo "xz recompression didn't help, keeping original"
+            fi
+          fi
+          rm -rf "$tmp"
 
       - name: Name deb with architecture
         run: |
