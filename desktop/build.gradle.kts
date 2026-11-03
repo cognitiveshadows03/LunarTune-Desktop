@@ -130,10 +130,10 @@ compose.desktop {
                 "java.transaction.xa",
                 "java.xml",
                 "jdk.accessibility",
+                "jdk.charsets",
                 "jdk.crypto.cryptoki",
                 "jdk.crypto.ec",
                 "jdk.management",
-                "jdk.unsafe",
                 "jdk.unsupported",
             )
 
