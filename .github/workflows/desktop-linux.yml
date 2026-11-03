@@ -41,25 +41,47 @@ jobs:
       - name: Build app image and deb
         run: ./gradlew :desktop:createDistributable :desktop:packageDeb -PlunarTuneArch=x64 --no-daemon
 
-      # Strip debug symbols from native libraries, then UPX-compress them.
-      # UPX achieves 40-60% compression on .so files (Skiko, lavaplayer native
-      # codecs) — the single biggest size win after the module curation.
-      - name: Strip and UPX-compress native libraries
+      # Shrink the app image: strip .so debug symbols, filter the
+      # lavaplayer-natives jar to Linux x64 only (it ships natives for every
+      # platform — 26M → ~8M), UPX-compress the remaining .so files, then strip
+      # the JDK runtime's .so files. The portable archive and deb both benefit
+      # because the jar filtering and UPX happen before any archive compression.
+      - name: Shrink app image (strip + filter natives + UPX)
         run: |
           app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
           if [ -z "$app_root" ]; then echo "No app image found"; exit 1; fi
           before=$(du -sh "$app_root" | cut -f1)
-          # Strip debug symbols.
+
+          # 1. Filter lavaplayer-natives jar to Linux x64 only.
+          natives_jar=$(find "$app_root" -name "lavaplayer-natives-*.jar" | head -1)
+          if [ -n "$natives_jar" ]; then
+            tmp=$(mktemp -d)
+            (cd "$tmp" && unzip -q "$natives_jar")
+            # Keep only Linux x86_64 natives; remove Windows, macOS, ARM.
+            find "$tmp" -type f \( -name "*.dll" -o -name "*.dylib" \) -delete 2>/dev/null || true
+            find "$tmp" -type d -name "aarch64" -exec rm -rf {} + 2>/dev/null || true
+            find "$tmp" -type d -name "arm" -exec rm -rf {} + 2>/dev/null || true
+            # UPX the remaining .so files inside the jar.
+            find "$tmp" -type f -name "*.so" -exec chmod +x {} \; 2>/dev/null || true
+            sudo apt-get install -y upx-ucl 2>/dev/null || true
+            if command -v upx &>/dev/null; then
+              find "$tmp" -type f -name "*.so" -size +50k -exec upx --best --lzma {} \; 2>&1 || true
+            fi
+            (cd "$tmp" && zip -q -r "$natives_jar" . )
+            rm -rf "$tmp"
+          fi
+
+          # 2. Strip debug symbols from all .so in the app image.
           find "$app_root" -type f -name "*.so" -exec strip --strip-all {} \; 2>/dev/null || true
-          # UPX needs execute permission to pack shared libraries.
+
+          # 3. UPX the large .so files (libjvm.so, libskiko, etc.).
           find "$app_root" -type f -name "*.so" -exec chmod +x {} \; 2>/dev/null || true
-          # Install and run UPX on every .so over 100k.
-          sudo apt-get install -y upx-ucl 2>/dev/null || true
           if command -v upx &>/dev/null; then
             find "$app_root" -type f -name "*.so" -size +100k -exec upx --best --lzma {} \; 2>&1 || true
           fi
+
           after=$(du -sh "$app_root" | cut -f1)
-          echo "App image: $before -> $after (strip + UPX)"
+          echo "App image: $before -> $after (strip + filter natives + UPX)"
 
       - name: Build portable tarball (xz -9e)
         run: |
