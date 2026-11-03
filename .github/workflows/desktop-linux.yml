@@ -41,23 +41,21 @@ jobs:
       - name: Build app image
         run: ./gradlew :desktop:createDistributable -PlunarTuneArch=x64 --no-daemon
 
-      # Re-jlink the bundled runtime with --compress=2. Compose Multiplatform's
-      # jlink invocation doesn't expose --compress, so we rebuild the runtime from
-      # the same module list the compose plugin already chose (read from the
-      # release file) but add zip-level compression. This typically cuts the
-      # runtime by 25-30%, which flows through to every artifact.
-      - name: Re-jlink runtime with compression
+      # Re-jlink the bundled runtime with --strip-debug. Compose Multiplatform's
+      # jlink invocation doesn't pass --strip-debug, so class-file debug info ships
+      # in the runtime. We rebuild from the same module list (read from the release
+      # file) with --strip-debug, which typically cuts 15-20% off the runtime
+      # without conflicting with the archive compression (xz/gzip/zip compress the
+      # stripped image better than a pre-compressed --compress=2 image).
+      - name: Re-jlink runtime with --strip-debug
         run: |
           runtime_dir=$(find desktop/build/compose/binaries/main/app -type d -name "runtime" | head -1)
           if [ -z "$runtime_dir" ]; then echo "No runtime dir found, skipping"; exit 0; fi
-          # The release file stores modules as space-separated; jlink --add-modules
-          # expects comma-separated. Convert spaces to commas.
           modules=$(grep "^MODULES=" "$runtime_dir/release" | sed 's/^MODULES=//' | tr -d '"' | tr ' ' ',')
           echo "Modules: $modules"
-          new_dir="${runtime_dir}.compressed"
+          new_dir="${runtime_dir}.stripped"
           before=$(du -sh "$runtime_dir" | cut -f1)
           "$JAVA_HOME/bin/jlink" \
-            --compress=2 \
             --strip-debug \
             --no-header-files \
             --no-man-pages \
@@ -68,7 +66,7 @@ jobs:
             rm -rf "$runtime_dir"
             mv "$new_dir" "$runtime_dir"
             after=$(du -sh "$runtime_dir" | cut -f1)
-            echo "Runtime: $before -> $after (with --compress=2)"
+            echo "Runtime: $before -> $after (with --strip-debug)"
           else
             echo "Re-jlink failed, keeping original runtime"
             rm -rf "$new_dir"

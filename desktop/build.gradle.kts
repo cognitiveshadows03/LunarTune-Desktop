@@ -129,7 +129,6 @@ compose.desktop {
                 "java.sql",
                 "java.transaction.xa",
                 "java.xml",
-                "jdk.accessibility",
                 "jdk.charsets",
                 "jdk.crypto.cryptoki",
                 "jdk.crypto.ec",
