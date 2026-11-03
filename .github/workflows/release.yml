@@ -49,7 +49,7 @@ jobs:
           $releaseFile = Join-Path $runtimeDir "release"
           if (-not (Test-Path $releaseFile)) { Write-Host "No release file, skipping"; exit 0 }
           $modulesLine = (Get-Content $releaseFile | Where-Object { $_ -match '^MODULES=' })
-          $modules = $modulesLine -replace '^MODULES=', '' -replace '"', ''
+          $modules = ($modulesLine -replace '^MODULES=', '' -replace '"', '').Trim() -replace ' ', ','
           $jlink = Join-Path $env:JAVA_HOME "bin\jlink.exe"
           $newDir = "$runtimeDir.compressed"
           & $jlink --compress=2 --strip-debug --no-header-files --no-man-pages `
@@ -126,7 +126,7 @@ jobs:
         run: |
           runtime_dir=$(find desktop/build/compose/binaries/main/app -type d -name "runtime" | head -1)
           if [ -z "$runtime_dir" ]; then echo "No runtime dir found, skipping"; exit 0; fi
-          modules=$(grep "^MODULES=" "$runtime_dir/release" | sed 's/^MODULES=//' | tr -d '"')
+          modules=$(grep "^MODULES=" "$runtime_dir/release" | sed 's/^MODULES=//' | tr -d '"' | tr ' ' ',')
           new_dir="${runtime_dir}.compressed"
           "$JAVA_HOME/bin/jlink" \
             --compress=2 --strip-debug --no-header-files --no-man-pages \

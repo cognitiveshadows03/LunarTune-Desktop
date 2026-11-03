@@ -50,7 +50,9 @@ jobs:
         run: |
           runtime_dir=$(find desktop/build/compose/binaries/main/app -type d -name "runtime" | head -1)
           if [ -z "$runtime_dir" ]; then echo "No runtime dir found, skipping"; exit 0; fi
-          modules=$(grep "^MODULES=" "$runtime_dir/release" | sed 's/^MODULES=//' | tr -d '"')
+          # The release file stores modules as space-separated; jlink --add-modules
+          # expects comma-separated. Convert spaces to commas.
+          modules=$(grep "^MODULES=" "$runtime_dir/release" | sed 's/^MODULES=//' | tr -d '"' | tr ' ' ',')
           echo "Modules: $modules"
           new_dir="${runtime_dir}.compressed"
           before=$(du -sh "$runtime_dir" | cut -f1)

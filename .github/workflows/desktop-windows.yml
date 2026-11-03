@@ -64,7 +64,7 @@ jobs:
           $releaseFile = Join-Path $runtimeDir "release"
           if (-not (Test-Path $releaseFile)) { Write-Host "No release file, skipping"; exit 0 }
           $modulesLine = (Get-Content $releaseFile | Where-Object { $_ -match '^MODULES=' })
-          $modules = $modulesLine -replace '^MODULES=', '' -replace '"', ''
+          $modules = ($modulesLine -replace '^MODULES=', '' -replace '"', '').Trim() -replace ' ', ','
           Write-Host "Modules: $modules"
           $jlink = Join-Path $env:JAVA_HOME "bin\jlink.exe"
           $newDir = "$runtimeDir.compressed"
