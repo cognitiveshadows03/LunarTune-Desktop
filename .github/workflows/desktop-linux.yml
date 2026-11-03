@@ -53,7 +53,7 @@ jobs:
           before=$(du -sh "$app_root" | cut -f1)
 
           # 1. Filter lavaplayer-natives jar to Linux x64 only.
-          natives_jar=$(find "$app_root" -name "lavaplayer-natives-*.jar" | head -1)
+          natives_jar=$(find "$(pwd)/$app_root" -name "lavaplayer-natives-*.jar" | head -1)
           if [ -n "$natives_jar" ]; then
             tmp=$(mktemp -d)
             (cd "$tmp" && unzip -q "$natives_jar")
@@ -67,6 +67,7 @@ jobs:
             if command -v upx &>/dev/null; then
               find "$tmp" -type f -name "*.so" -size +50k -exec upx --best --lzma {} \; 2>&1 || true
             fi
+            rm -f "$natives_jar"
             (cd "$tmp" && zip -q -r "$natives_jar" . )
             rm -rf "$tmp"
           fi
