@@ -1,0 +1,82 @@
+name: Build Linux Desktop
+
+on:
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "core/**"
+      - "lyrics/**"
+      - "morideobfuscator/**"
+      - "gradle/**"
+      - "settings.gradle.kts"
+      - "build.gradle.kts"
+      - ".github/workflows/desktop-linux.yml"
+  push:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - "core/**"
+      - "lyrics/**"
+      - "morideobfuscator/**"
+      - "gradle/**"
+      - "settings.gradle.kts"
+      - "build.gradle.kts"
+      - ".github/workflows/desktop-linux.yml"
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    name: Linux x64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+
+      # createDistributable produces the unpacked app image (launcher + jlink
+      # runtime + jars). CI strips the runtime's native libraries of debug
+      # symbols to shave a few MB off the portable archive and the .deb, then
+      # zips the image as the portable download and builds the .deb installer.
+      - name: Build Linux app image and deb installer
+        run: ./gradlew :desktop:createDistributable :desktop:packageDeb -PlunarTuneArch=x64 --no-daemon
+
+      - name: Strip debug symbols from the bundled runtime
+        run: |
+          app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
+          if [ -z "$app_root" ]; then echo "No app image found"; exit 1; fi
+          echo "App image: $app_root"
+          # strip every shared object jpackage bundled from the JDK modules.
+          find "$app_root" -type f \( -name "*.so" -o -name "libjvm.so" \) -print -exec strip --strip-unneeded {} \; 2>/dev/null || true
+
+      - name: Build portable tarball
+        run: |
+          app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
+          base=$(basename "$app_root")
+          out="desktop/build/compose/binaries/main/LunarTune-5.2.0-x64-portable.tar.gz"
+          tar -C "$(dirname "$app_root")" -czf "$out" "$base"
+          ls -lh "$out"
+
+      - name: Name deb with architecture
+        run: |
+          deb=$(find desktop/build/compose/binaries/main/deb -name "*.deb" | head -n1)
+          if [ -n "$deb" ]; then mv "$deb" "desktop/build/compose/binaries/main/deb/LunarTune-5.2.0-x64.deb"; fi
+
+      - name: Report artifact sizes
+        run: |
+          ls -lh desktop/build/compose/binaries/main/deb/*.deb desktop/build/compose/binaries/main/*.tar.gz 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lunartune-linux-x64-deb
+          path: desktop/build/compose/binaries/main/deb/*.deb
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lunartune-linux-x64-portable
+          path: desktop/build/compose/binaries/main/*-portable.tar.gz
+          if-no-files-found: error

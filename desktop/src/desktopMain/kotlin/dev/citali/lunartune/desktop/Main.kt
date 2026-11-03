@@ -16,6 +16,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import coil3.ImageLoader
+import coil3.PlatformContext
+import coil3.compose.setSingletonImageLoaderFactory
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
+import coil3.request.crossfade
 import dev.citali.lunartune.desktop.app.DesktopAppViewModel
 import dev.citali.lunartune.desktop.catalog.InnerTubeCatalog
 import dev.citali.lunartune.desktop.lyrics.DesktopLyricsRepository
@@ -33,13 +38,18 @@ fun main(args: Array<String>) {
 
     application {
         val viewModel = remember { createViewModel() }
+        // Coil3 needs an OkHttp-backed fetcher on JVM; configure it once for the
+        // whole app so every AsyncImage shares a single image loader + cache.
+        setSingletonImageLoaderFactory { platformContext ->
+            buildImageLoader(platformContext)
+        }
         Window(
             onCloseRequest = {
                 viewModel.dispose()
                 exitApplication()
             },
             title = "LunarTune",
-            state = rememberWindowState(width = 1280.dp, height = 820.dp),
+            state = rememberWindowState(width = 1440.dp, height = 900.dp),
             onKeyEvent = { event ->
                 if (event.key == Key.Spacebar && event.type == KeyEventType.KeyDown) {
                     viewModel.togglePlayPause()
@@ -55,6 +65,15 @@ fun main(args: Array<String>) {
         }
     }
 }
+
+private fun buildImageLoader(platformContext: PlatformContext): ImageLoader =
+    ImageLoader
+        .Builder(platformContext)
+        .components {
+            add(OkHttpNetworkFetcherFactory())
+        }
+        .crossfade(true)
+        .build()
 
 /**
  * Non-visual smoke test for the packaged jlink runtime. CI runs the packaged

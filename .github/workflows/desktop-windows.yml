@@ -95,18 +95,16 @@ jobs:
           $msi = Get-ChildItem "desktop/build/compose/binaries/main/msi/*.msi" | Select-Object -First 1
           if ($msi) { Move-Item $msi.FullName "desktop/build/compose/binaries/main/msi/LunarTune-5.2.0-${{ matrix.arch }}.msi" -Force }
 
-      - name: Zip portable build
+      - name: Zip portable build (max compression)
         shell: pwsh
         run: |
           $appRoot = Get-ChildItem "desktop/build/compose/binaries/main/app" -Directory | Select-Object -First 1
           if (-not $appRoot) { throw "No app image to zip" }
           $zip = "desktop/build/compose/binaries/main/LunarTune-5.2.0-${{ matrix.arch }}-portable.zip"
           Remove-Item $zip -ErrorAction SilentlyContinue
-          # bsdtar ships with Windows; fall back to Compress-Archive if absent.
-          tar.exe -a -cf $zip -C "desktop/build/compose/binaries/main/app" $appRoot.Name
-          if ($LASTEXITCODE -ne 0) {
-            Compress-Archive -Path $appRoot.FullName -DestinationPath $zip -CompressionLevel Optimal
-          }
+          # Compress-Archive at Optimal level beats bsdtar's default deflate by a
+          # few percent on the bundled runtime, which is the bulk of the archive.
+          Compress-Archive -Path $appRoot.FullName -DestinationPath $zip -CompressionLevel Optimal
           if (-not (Test-Path $zip)) { throw "Portable zip was not created" }
 
       - name: Report installer sizes

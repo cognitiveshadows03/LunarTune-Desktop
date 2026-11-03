@@ -7,13 +7,12 @@
 
 package dev.citali.lunartune.desktop.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -21,7 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.citali.lunartune.desktop.model.LyricsDocument
@@ -49,15 +48,26 @@ fun NowPlayingPanel(
                 text = "NOW PLAYING",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
             )
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(14.dp))
 
-            ArtworkTile(title = track?.title ?: "LunarTune", size = 148.dp)
+            // Square artwork, fills the panel width and keeps aspect ratio so the
+            // cover is never squashed on tall windows.
+            Artwork(
+                title = track?.title ?: "LunarTune",
+                thumbnailUrl = track?.thumbnailUrl,
+                size = 0.dp,
+                cornerRadius = 18.dp,
+                fill = true,
+                modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+            )
 
             Spacer(Modifier.height(16.dp))
             Text(
                 text = track?.title ?: "Nothing playing",
                 style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

@@ -28,6 +28,8 @@ configurations.configureEach {
     exclude(group = "com.github.walkyst.lavaplayer-fork", module = "lavaplayer-ext-format-xm")
     exclude(group = "com.github.walkyst.lavaplayer-fork", module = "lavaplayer-stream-merger")
     exclude(group = "com.github.walkyst.lavaplayer-fork", module = "lavaplayer-ext-youtube-rotator")
+    // Coil ships a separate GIF decoder we don't need - static artwork only.
+    exclude(group = "io.coil-kt.coil3", module = "coil-gif")
 }
 
 kotlin {
@@ -63,6 +65,11 @@ kotlin {
                 implementation(libs.ktor.client.okhttp)
                 implementation(libs.lavaplayer.fork)
                 runtimeOnly(libs.slf4j.nop)
+
+                // Album-art loading. Coil3 is multiplatform; the OkHttp network
+                // fetcher reuses the HTTP stack already on the classpath.
+                implementation(libs.coil)
+                implementation(libs.coil.network.okhttp)
 
                 // Exactly the same pure-JVM libraries the Android app uses: the
                 // InnerTube/YouTube client and every lyrics provider.
@@ -107,6 +114,18 @@ compose.desktop {
             // and jdeps cannot see reflection. Ship the complete module set; the
             // classpath exclusions above still keep most of the size saving.
             includeAllModules = true
+
+            // Runtime tuning only - no behaviour change. String deduplication trims
+            // heap pressure from the many short-lived strings the lyrics parser and
+            // InnerTube JSON decoder produce; capping the heap lets the launcher sit
+            // comfortably alongside other desktop apps.
+            jvmArgs(
+                "-XX:+UseG1GC",
+                "-XX:MaxRAMPercentage=45",
+                "-XX:+UseStringDeduplication",
+                "-Dawt.useSystemAAFontSettings=on",
+                "-Dswing.aatext=true",
+            )
 
             windows {
                 upgradeUuid =

@@ -1,0 +1,44 @@
+name: Build macOS Desktop (future)
+
+# macOS distribution is not part of the pre-release pipeline yet - jpackage on
+# macOS needs code signing + notarisation to ship a .dmg that opens cleanly on
+# other machines, and that requires secrets we don't have wired up. This workflow
+# is here so the build path is exercised on demand; flip it onto the release
+# pipeline once signing is in place.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "macos-*"
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    name: macOS (unsigned)
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build macOS app image and dmg
+        run: ./gradlew :desktop:packageDmg :desktop:createDistributable -PlunarTuneArch=x64 --no-daemon
+
+      - name: Build portable tarball
+        run: |
+          app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
+          base=$(basename "$app_root")
+          tar -C "$(dirname "$app_root")" -czf "desktop/build/compose/binaries/main/LunarTune-5.2.0-macos-portable.tar.gz" "$base"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lunartune-macos-x64
+          path: |
+            desktop/build/compose/binaries/main/dmg/*.dmg
+            desktop/build/compose/binaries/main/*-portable.tar.gz
+          if-no-files-found: warn

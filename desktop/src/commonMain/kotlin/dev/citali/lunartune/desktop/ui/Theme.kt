@@ -8,11 +8,15 @@
 package dev.citali.lunartune.desktop.ui
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 
 val LunarTuneSeed = Color(0xFFED5564)
 
@@ -50,7 +54,22 @@ fun LunarTuneDesktopTheme(
                 outline = shade(seed, Color.White, 0.18f),
             )
         }
-    MaterialTheme(colorScheme = scheme, content = content)
+    val typography =
+        remember {
+            Typography(
+                headlineLarge = TextStyle(fontSize = 30.sp, fontWeight = FontWeight.Bold, lineHeight = 36.sp),
+                headlineMedium = TextStyle(fontSize = 24.sp, fontWeight = FontWeight.SemiBold, lineHeight = 30.sp),
+                titleLarge = TextStyle(fontSize = 18.sp, fontWeight = FontWeight.SemiBold, lineHeight = 24.sp),
+                titleMedium = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Medium, lineHeight = 20.sp),
+                bodyLarge = TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
+                bodyMedium = TextStyle(fontSize = 13.sp, lineHeight = 18.sp),
+                bodySmall = TextStyle(fontSize = 12.sp, lineHeight = 16.sp),
+                labelLarge = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Medium),
+                labelMedium = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.Medium),
+                labelSmall = TextStyle(fontSize = 10.sp, fontWeight = FontWeight.Medium),
+            )
+        }
+    MaterialTheme(colorScheme = scheme, typography = typography, content = content)
 }
 
 private fun shade(
@@ -58,3 +77,12 @@ private fun shade(
     towards: Color,
     amount: Float,
 ): Color = lerp(seed, towards, amount)
+
+/** Mood-chip accent colours used by the home screen's Relax / Workout / Party row. */
+object MoodPalette {
+    val relax = Color(0xFF6B8E9E)
+    val workout = Color(0xFFE0564E)
+    val party = Color(0xFFC962B4)
+    val focus = Color(0xFF6F7BC4)
+    val sleep = Color(0xFF4A5C7A)
+}
