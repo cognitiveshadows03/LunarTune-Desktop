@@ -133,7 +133,6 @@ compose.desktop {
                 "jdk.charsets",
                 "jdk.crypto.cryptoki",
                 "jdk.crypto.ec",
-                "jdk.management",
                 "jdk.unsupported",
             )
 

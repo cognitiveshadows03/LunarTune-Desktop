@@ -38,37 +38,60 @@ jobs:
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v4
 
-      # Build the app image first, then strip debug symbols from every .so in
-      # the bundled runtime, then build the .deb from the stripped image. This
-      # way both the portable tarball and the .deb benefit from the strip pass.
-      # We split the gradle invocations so the strip runs between createDistributable
-      # and packageDeb; gradle sees createDistributable's inputs unchanged and
-      # skips re-running it, so the stripped image survives into the .deb.
       - name: Build app image
         run: ./gradlew :desktop:createDistributable -PlunarTuneArch=x64 --no-daemon
 
-      - name: Strip debug symbols from the bundled runtime
+      # Re-jlink the bundled runtime with --compress=2. Compose Multiplatform's
+      # jlink invocation doesn't expose --compress, so we rebuild the runtime from
+      # the same module list the compose plugin already chose (read from the
+      # release file) but add zip-level compression. This typically cuts the
+      # runtime by 25-30%, which flows through to every artifact.
+      - name: Re-jlink runtime with compression
+        run: |
+          runtime_dir=$(find desktop/build/compose/binaries/main/app -type d -name "runtime" | head -1)
+          if [ -z "$runtime_dir" ]; then echo "No runtime dir found, skipping"; exit 0; fi
+          modules=$(grep "^MODULES=" "$runtime_dir/release" | sed 's/^MODULES=//' | tr -d '"')
+          echo "Modules: $modules"
+          new_dir="${runtime_dir}.compressed"
+          before=$(du -sh "$runtime_dir" | cut -f1)
+          "$JAVA_HOME/bin/jlink" \
+            --compress=2 \
+            --strip-debug \
+            --no-header-files \
+            --no-man-pages \
+            --module-path "$JAVA_HOME/jmods" \
+            --add-modules "$modules" \
+            --output "$new_dir" 2>&1
+          if [ $? -eq 0 ] && [ -d "$new_dir" ]; then
+            rm -rf "$runtime_dir"
+            mv "$new_dir" "$runtime_dir"
+            after=$(du -sh "$runtime_dir" | cut -f1)
+            echo "Runtime: $before -> $after (with --compress=2)"
+          else
+            echo "Re-jlink failed, keeping original runtime"
+            rm -rf "$new_dir"
+          fi
+
+      - name: Strip debug symbols from native libraries
         run: |
           app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
           if [ -z "$app_root" ]; then echo "No app image found"; exit 1; fi
-          echo "App image: $app_root"
           before=$(du -sh "$app_root" | cut -f1)
-          find "$app_root" -type f -name "*.so" -exec strip --strip-unneeded {} \; 2>/dev/null || true
-          # Also remove the JDK's bundled debug symbols if present (.debuginfo files).
+          find "$app_root" -type f -name "*.so" -exec strip --strip-all {} \; 2>/dev/null || true
           find "$app_root" -type f -name "*.debuginfo" -delete 2>/dev/null || true
           after=$(du -sh "$app_root" | cut -f1)
-          echo "App image: $before -> $after"
+          echo "App image: $before -> $after (after strip)"
 
-      - name: Build deb installer from stripped image
+      - name: Build deb installer from compressed image
         run: ./gradlew :desktop:packageDeb -PlunarTuneArch=x64 --no-daemon
 
-      - name: Build portable tarball (xz)
+      - name: Build portable tarball (xz -9e)
         run: |
           app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
           base=$(basename "$app_root")
           out="desktop/build/compose/binaries/main/LunarTune-5.2.0-x64-portable.tar.xz"
-          # xz compression is ~30% smaller than gzip on JVM runtimes.
-          tar -C "$(dirname "$app_root")" -cJf "$out" "$base"
+          # xz -9e (extreme) squeezes the JVM runtime harder than tar's default -J (level 6).
+          tar -cf - -C "$(dirname "$app_root")" "$base" | xz -9e > "$out"
           ls -lh "$out"
 
       - name: Name deb with architecture

@@ -49,10 +49,42 @@ jobs:
           architecture: ${{ matrix.java_arch }}
       - uses: gradle/actions/setup-gradle@v4
 
-      # createDistributable produces the unpacked app image (launcher + jlink
-      # runtime + jars). CI zips it as the portable download.
-      - name: Build ${{ matrix.arch }} installers and portable image
-        run: .\gradlew.bat :desktop:packageExe :desktop:packageMsi :desktop:createDistributable -PlunarTuneArch=${{ matrix.arch }} --no-daemon
+      # Build the app image first, then re-jlink the runtime with --compress=2
+      # before building the installers. This way .exe, .msi and portable zip all
+      # benefit from the compressed runtime (typically 25-30% smaller).
+      - name: Build app image
+        run: .\gradlew.bat :desktop:createDistributable -PlunarTuneArch=${{ matrix.arch }} --no-daemon
+
+      - name: Re-jlink runtime with compression
+        shell: pwsh
+        run: |
+          $appRoot = Get-ChildItem "desktop/build/compose/binaries/main/app" -Directory | Select-Object -First 1
+          $runtimeDir = Join-Path $appRoot.FullName "runtime"
+          if (-not (Test-Path $runtimeDir)) { Write-Host "No runtime dir, skipping"; exit 0 }
+          $releaseFile = Join-Path $runtimeDir "release"
+          if (-not (Test-Path $releaseFile)) { Write-Host "No release file, skipping"; exit 0 }
+          $modulesLine = (Get-Content $releaseFile | Where-Object { $_ -match '^MODULES=' })
+          $modules = $modulesLine -replace '^MODULES=', '' -replace '"', ''
+          Write-Host "Modules: $modules"
+          $jlink = Join-Path $env:JAVA_HOME "bin\jlink.exe"
+          $newDir = "$runtimeDir.compressed"
+          $before = (Get-ChildItem $runtimeDir -Recurse -File | Measure-Object -Property Length -Sum).Sum
+          & $jlink --compress=2 --strip-debug --no-header-files --no-man-pages `
+            --module-path (Join-Path $env:JAVA_HOME "jmods") `
+            --add-modules $modules `
+            --output $newDir 2>&1
+          if ($LASTEXITCODE -eq 0 -and (Test-Path $newDir)) {
+            Remove-Item $runtimeDir -Recurse -Force
+            Rename-Item $newDir $runtimeDir
+            $after = (Get-ChildItem $runtimeDir -Recurse -File | Measure-Object -Property Length -Sum).Sum
+            Write-Host "Runtime: $([math]::Round($before/1MB,1)) MB -> $([math]::Round($after/1MB,1)) MB (with --compress=2)"
+          } else {
+            Write-Host "Re-jlink failed, keeping original runtime"
+            if (Test-Path $newDir) { Remove-Item $newDir -Recurse -Force }
+          }
+
+      - name: Build installers from compressed image
+        run: .\gradlew.bat :desktop:packageExe :desktop:packageMsi -PlunarTuneArch=${{ matrix.arch }} --no-daemon
 
       # A green build says nothing about the packaged jlink runtime: jpackage's
       # native launcher is the only thing that reports "Failed to launch JVM".

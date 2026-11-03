@@ -37,8 +37,36 @@ jobs:
           architecture: ${{ matrix.java_arch }}
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Build ${{ matrix.arch }} installers and portable image
-        run: .\gradlew.bat :desktop:packageExe :desktop:packageMsi :desktop:createDistributable -PlunarTuneArch=${{ matrix.arch }} --no-daemon
+      - name: Build app image
+        run: .\gradlew.bat :desktop:createDistributable -PlunarTuneArch=${{ matrix.arch }} --no-daemon
+
+      - name: Re-jlink runtime with compression
+        shell: pwsh
+        run: |
+          $appRoot = Get-ChildItem "desktop/build/compose/binaries/main/app" -Directory | Select-Object -First 1
+          $runtimeDir = Join-Path $appRoot.FullName "runtime"
+          if (-not (Test-Path $runtimeDir)) { Write-Host "No runtime dir, skipping"; exit 0 }
+          $releaseFile = Join-Path $runtimeDir "release"
+          if (-not (Test-Path $releaseFile)) { Write-Host "No release file, skipping"; exit 0 }
+          $modulesLine = (Get-Content $releaseFile | Where-Object { $_ -match '^MODULES=' })
+          $modules = $modulesLine -replace '^MODULES=', '' -replace '"', ''
+          $jlink = Join-Path $env:JAVA_HOME "bin\jlink.exe"
+          $newDir = "$runtimeDir.compressed"
+          & $jlink --compress=2 --strip-debug --no-header-files --no-man-pages `
+            --module-path (Join-Path $env:JAVA_HOME "jmods") `
+            --add-modules $modules `
+            --output $newDir 2>&1
+          if ($LASTEXITCODE -eq 0 -and (Test-Path $newDir)) {
+            Remove-Item $runtimeDir -Recurse -Force
+            Rename-Item $newDir $runtimeDir
+            Write-Host "Re-jlinked runtime with --compress=2"
+          } else {
+            Write-Host "Re-jlink failed, keeping original runtime"
+            if (Test-Path $newDir) { Remove-Item $newDir -Recurse -Force }
+          }
+
+      - name: Build installers from compressed image
+        run: .\gradlew.bat :desktop:packageExe :desktop:packageMsi -PlunarTuneArch=${{ matrix.arch }} --no-daemon
 
       - name: Name installers with architecture
         shell: pwsh
@@ -48,7 +76,7 @@ jobs:
           $msi = Get-ChildItem "desktop/build/compose/binaries/main/msi/*.msi" | Select-Object -First 1
           if ($msi) { Move-Item $msi.FullName "desktop/build/compose/binaries/main/msi/LunarTune-5.2.0-${{ matrix.arch }}.msi" -Force }
 
-      - name: Strip debug symbols from bundled runtime (portable only)
+      - name: Strip debug symbols from bundled DLLs (portable only)
         shell: pwsh
         run: |
           $appRoot = Get-ChildItem "desktop/build/compose/binaries/main/app" -Directory | Select-Object -First 1
@@ -94,20 +122,40 @@ jobs:
       - name: Build app image
         run: ./gradlew :desktop:createDistributable -PlunarTuneArch=x64 --no-daemon
 
-      - name: Strip debug symbols from the bundled runtime
+      - name: Re-jlink runtime with compression
+        run: |
+          runtime_dir=$(find desktop/build/compose/binaries/main/app -type d -name "runtime" | head -1)
+          if [ -z "$runtime_dir" ]; then echo "No runtime dir found, skipping"; exit 0; fi
+          modules=$(grep "^MODULES=" "$runtime_dir/release" | sed 's/^MODULES=//' | tr -d '"')
+          new_dir="${runtime_dir}.compressed"
+          "$JAVA_HOME/bin/jlink" \
+            --compress=2 --strip-debug --no-header-files --no-man-pages \
+            --module-path "$JAVA_HOME/jmods" \
+            --add-modules "$modules" \
+            --output "$new_dir" 2>&1
+          if [ $? -eq 0 ] && [ -d "$new_dir" ]; then
+            rm -rf "$runtime_dir"
+            mv "$new_dir" "$runtime_dir"
+            echo "Re-jlinked runtime with --compress=2"
+          else
+            echo "Re-jlink failed, keeping original runtime"
+            rm -rf "$new_dir"
+          fi
+
+      - name: Strip debug symbols from native libraries
         run: |
           app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
-          find "$app_root" -type f -name "*.so" -exec strip --strip-unneeded {} \; 2>/dev/null || true
+          find "$app_root" -type f -name "*.so" -exec strip --strip-all {} \; 2>/dev/null || true
           find "$app_root" -type f -name "*.debuginfo" -delete 2>/dev/null || true
 
-      - name: Build deb installer from stripped image
+      - name: Build deb installer from compressed image
         run: ./gradlew :desktop:packageDeb -PlunarTuneArch=x64 --no-daemon
 
-      - name: Build portable tarball (xz)
+      - name: Build portable tarball (xz -9e)
         run: |
           app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
           base=$(basename "$app_root")
-          tar -C "$(dirname "$app_root")" -cJf "desktop/build/compose/binaries/main/LunarTune-5.2.0-x64-portable.tar.xz" "$base"
+          tar -cf - -C "$(dirname "$app_root")" "$base" | xz -9e > "desktop/build/compose/binaries/main/LunarTune-5.2.0-x64-portable.tar.xz"
           deb=$(find desktop/build/compose/binaries/main/deb -name "*.deb" | head -n1)
           if [ -n "$deb" ]; then mv "$deb" "desktop/build/compose/binaries/main/deb/LunarTune-5.2.0-x64.deb"; fi
 
