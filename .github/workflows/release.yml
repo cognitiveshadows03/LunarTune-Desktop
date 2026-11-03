@@ -106,42 +106,67 @@ jobs:
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Build app image and deb
-        run: ./gradlew :desktop:createDistributable :desktop:packageDeb -PlunarTuneArch=x64 --no-daemon
+      - name: Build app image
+        run: ./gradlew :desktop:createDistributable -PlunarTuneArch=x64 --no-daemon
 
-      - name: Strip and UPX-compress native libraries
+      - name: Shrink app image (filter natives + strip + UPX)
         run: |
           app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
           if [ -z "$app_root" ]; then echo "No app image found"; exit 1; fi
           before=$(du -sh "$app_root" | cut -f1)
+          natives_jar=$(find "$(pwd)/$app_root" -name "lavaplayer-natives-*.jar" | head -1)
+          if [ -n "$natives_jar" ]; then
+            tmp=$(mktemp -d)
+            (cd "$tmp" && unzip -q "$natives_jar")
+            find "$tmp" -type f \( -name "*.dll" -o -name "*.dylib" \) -delete 2>/dev/null || true
+            find "$tmp" -type d -name "aarch64" -exec rm -rf {} + 2>/dev/null || true
+            find "$tmp" -type d -name "arm" -exec rm -rf {} + 2>/dev/null || true
+            find "$tmp" -type f -name "*.so" -exec chmod +x {} \; 2>/dev/null || true
+            sudo apt-get install -y upx-ucl 2>/dev/null || true
+            if command -v upx &>/dev/null; then
+              find "$tmp" -type f -name "*.so" -size +50k -exec upx --best --lzma {} \; 2>&1 || true
+            fi
+            rm -f "$natives_jar"
+            (cd "$tmp" && zip -q -r "$natives_jar" . )
+            rm -rf "$tmp"
+          fi
           find "$app_root" -type f -name "*.so" -exec strip --strip-all {} \; 2>/dev/null || true
-          sudo apt-get install -y upx-ucl 2>/dev/null || true
+          find "$app_root" -type f -name "*.so" -exec chmod +x {} \; 2>/dev/null || true
           if command -v upx &>/dev/null; then
-            find "$app_root" -type f -name "*.so" -exec upx --best --lzma {} \; 2>/dev/null || true
+            find "$app_root" -type f -name "*.so" -size +100k -exec upx --best --lzma {} \; 2>&1 || true
           fi
           after=$(du -sh "$app_root" | cut -f1)
-          echo "App image: $before -> $after (strip + UPX)"
+          echo "App image: $before -> $after (filter natives + strip + UPX)"
+
+      - name: Build deb from shrunk image
+        run: ./gradlew :desktop:packageDeb -PlunarTuneArch=x64 --no-daemon
 
       - name: Build portable tarball (xz -9e) and recompress deb
         run: |
           app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
           base=$(basename "$app_root")
           tar -cf - -C "$(dirname "$app_root")" "$base" | xz -9e > "desktop/build/compose/binaries/main/LunarTune-5.2.0-x64-portable.tar.xz"
-          # Recompress deb data.tar.gz as data.tar.xz
-          deb=$(find desktop/build/compose/binaries/main/deb -name "*.deb" | head -n1)
+          deb=$(find "$(pwd)/desktop/build/compose/binaries/main/deb" -name "*.deb" | head -n1)
           if [ -n "$deb" ]; then
+            before=$(stat -c%s "$deb")
             tmp=$(mktemp -d)
             cp "$deb" "$tmp/orig.deb"
-            cd "$tmp"
-            ar x orig.deb
-            if [ -f data.tar.gz ]; then
-              zcat data.tar.gz | xz -9e > data.tar.xz
-              rm data.tar.gz
-              ar rcs new.deb debian-binary control.tar.gz data.tar.xz 2>/dev/null || \
-                ar rcs new.deb debian-binary control.tar.xz data.tar.xz 2>/dev/null || true
-              if [ -f new.deb ] && [ $(stat -c%s new.deb) -lt $(stat -c%s orig.deb) ]; then
-                cp new.deb "$deb"
-              fi
+            (cd "$tmp" && ar x orig.deb)
+            if [ -f "$tmp/data.tar.zst" ]; then
+              zstd -d "$tmp/data.tar.zst" -o "$tmp/data.tar"
+              rm "$tmp/data.tar.zst"
+            elif [ -f "$tmp/data.tar.gz" ]; then
+              zcat "$tmp/data.tar.gz" > "$tmp/data.tar"
+              rm "$tmp/data.tar.gz"
+            elif [ -f "$tmp/data.tar.xz" ]; then
+              rm -rf "$tmp"
+              mv "$deb" "desktop/build/compose/binaries/main/deb/LunarTune-5.2.0-x64.deb"
+              exit 0
+            fi
+            xz -9e "$tmp/data.tar"
+            (cd "$tmp" && ar rcs new.deb debian-binary control.tar.* data.tar.xz)
+            if [ -f "$tmp/new.deb" ] && [ $(stat -c%s "$tmp/new.deb") -lt "$before" ]; then
+              cp "$tmp/new.deb" "$deb"
             fi
             rm -rf "$tmp"
             mv "$deb" "desktop/build/compose/binaries/main/deb/LunarTune-5.2.0-x64.deb"

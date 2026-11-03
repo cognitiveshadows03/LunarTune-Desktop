@@ -38,15 +38,15 @@ jobs:
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Build app image and deb
-        run: ./gradlew :desktop:createDistributable :desktop:packageDeb -PlunarTuneArch=x64 --no-daemon
+      - name: Build app image
+        run: ./gradlew :desktop:createDistributable -PlunarTuneArch=x64 --no-daemon
 
-      # Shrink the app image: strip .so debug symbols, filter the
-      # lavaplayer-natives jar to Linux x64 only (it ships natives for every
-      # platform — 26M → ~8M), UPX-compress the remaining .so files, then strip
-      # the JDK runtime's .so files. The portable archive and deb both benefit
-      # because the jar filtering and UPX happen before any archive compression.
-      - name: Shrink app image (strip + filter natives + UPX)
+      # Shrink the app image: filter the lavaplayer-natives jar to Linux x64
+      # only (it ships natives for every platform — 26M → ~8M), strip .so debug
+      # symbols, and UPX-compress the large .so files. Both the portable archive
+      # and the .deb benefit because the shrink runs before packageDeb and the
+      # portable tarball.
+      - name: Shrink app image (filter natives + strip + UPX)
         run: |
           app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
           if [ -z "$app_root" ]; then echo "No app image found"; exit 1; fi
@@ -57,11 +57,9 @@ jobs:
           if [ -n "$natives_jar" ]; then
             tmp=$(mktemp -d)
             (cd "$tmp" && unzip -q "$natives_jar")
-            # Keep only Linux x86_64 natives; remove Windows, macOS, ARM.
             find "$tmp" -type f \( -name "*.dll" -o -name "*.dylib" \) -delete 2>/dev/null || true
             find "$tmp" -type d -name "aarch64" -exec rm -rf {} + 2>/dev/null || true
             find "$tmp" -type d -name "arm" -exec rm -rf {} + 2>/dev/null || true
-            # UPX the remaining .so files inside the jar.
             find "$tmp" -type f -name "*.so" -exec chmod +x {} \; 2>/dev/null || true
             sudo apt-get install -y upx-ucl 2>/dev/null || true
             if command -v upx &>/dev/null; then
@@ -82,7 +80,10 @@ jobs:
           fi
 
           after=$(du -sh "$app_root" | cut -f1)
-          echo "App image: $before -> $after (strip + filter natives + UPX)"
+          echo "App image: $before -> $after (filter natives + strip + UPX)"
+
+      - name: Build deb from shrunk image
+        run: ./gradlew :desktop:packageDeb -PlunarTuneArch=x64 --no-daemon
 
       - name: Build portable tarball (xz -9e)
         run: |
