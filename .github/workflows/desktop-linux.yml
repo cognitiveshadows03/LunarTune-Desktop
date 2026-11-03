@@ -51,13 +51,17 @@ jobs:
           before=$(du -sh "$app_root" | cut -f1)
           # Strip debug symbols.
           find "$app_root" -type f -name "*.so" -exec strip --strip-all {} \; 2>/dev/null || true
-          # Install and run UPX on every .so.
+          # Install and run UPX on every .so (some JDK .so files may be too large
+          # or use ELF features UPX can't handle; errors are non-fatal).
           sudo apt-get install -y upx-ucl 2>/dev/null || true
           if command -v upx &>/dev/null; then
-            find "$app_root" -type f -name "*.so" -exec upx --best --lzma {} \; 2>/dev/null || true
+            find "$app_root" -type f -name "*.so" -size +100k -exec upx --best --lzma {} \; 2>&1 || true
           fi
           after=$(du -sh "$app_root" | cut -f1)
           echo "App image: $before -> $after (strip + UPX)"
+          # Diagnostic: list the 20 largest files in the app image.
+          echo "=== 20 largest files ==="
+          find "$app_root" -type f -exec du -h {} + 2>/dev/null | sort -rh | head -20
 
       - name: Build portable tarball (xz -9e)
         run: |
@@ -74,23 +78,30 @@ jobs:
         run: |
           deb=$(find desktop/build/compose/binaries/main/deb -name "*.deb" | head -n1)
           if [ -z "$deb" ]; then echo "No deb found"; exit 0; fi
+          echo "=== Deb contents ==="
+          ar t "$deb"
           before=$(du -h "$deb" | cut -f1)
           tmp=$(mktemp -d)
           cp "$deb" "$tmp/orig.deb"
           cd "$tmp"
           ar x orig.deb
+          ls -lh
+          # Handle both gzip and zst compression
           if [ -f data.tar.gz ]; then
             zcat data.tar.gz | xz -9e > data.tar.xz
             rm data.tar.gz
-            ar rcs new.deb debian-binary control.tar.gz data.tar.xz 2>/dev/null || \
-              ar rcs new.deb debian-binary control.tar.xz data.tar.xz 2>/dev/null || true
-            if [ -f new.deb ] && [ $(stat -c%s new.deb) -lt $(stat -c%s orig.deb) ]; then
-              cp new.deb "$deb"
-              after=$(du -h "$deb" | cut -f1)
-              echo "Deb: $before -> $after (gzip -> xz)"
-            else
-              echo "xz recompression didn't help, keeping original"
-            fi
+          elif [ -f data.tar.zst ]; then
+            zstd -d data.tar.zst -o data.tar
+            xz -9e data.tar
+            rm data.tar.zst
+          fi
+          ar rcs new.deb debian-binary control.tar.* data.tar.xz 2>/dev/null || true
+          if [ -f new.deb ] && [ $(stat -c%s new.deb) -lt $(stat -c%s orig.deb) ]; then
+            cp new.deb "$deb"
+            after=$(du -h "$deb" | cut -f1)
+            echo "Deb: $before -> $after (recompressed with xz)"
+          else
+            echo "xz recompression didn't help, keeping original"
           fi
           rm -rf "$tmp"
 
