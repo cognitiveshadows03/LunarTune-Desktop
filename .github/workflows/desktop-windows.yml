@@ -95,6 +95,25 @@ jobs:
           $msi = Get-ChildItem "desktop/build/compose/binaries/main/msi/*.msi" | Select-Object -First 1
           if ($msi) { Move-Item $msi.FullName "desktop/build/compose/binaries/main/msi/LunarTune-5.2.0-${{ matrix.arch }}.msi" -Force }
 
+      # The .exe and .msi installers are built by jpackage from the app image
+      # in the gradle invocation above, so they already benefit from the curated
+      # jlink module list. The portable zip is built from the same app image
+      # below; we strip debug symbols from the bundled DLLs first to shave a few
+      # more MB off the archive. strip.exe ships with Git for Windows (MSYS2).
+      - name: Strip debug symbols from bundled runtime (portable only)
+        shell: pwsh
+        run: |
+          $appRoot = Get-ChildItem "desktop/build/compose/binaries/main/app" -Directory | Select-Object -First 1
+          if (-not $appRoot) { Write-Host "No app image found, skipping strip"; exit 0 }
+          $strip = "C:\Program Files\Git\usr\bin\strip.exe"
+          if (-not (Test-Path $strip)) { Write-Host "strip.exe not found, skipping"; exit 0 }
+          $before = (Get-ChildItem $appRoot.FullName -Recurse -File | Measure-Object -Property Length -Sum).Sum
+          Get-ChildItem $appRoot.FullName -Recurse -Filter "*.dll" | ForEach-Object {
+            & $strip --strip-unneeded $_.FullName 2>$null
+          }
+          $after = (Get-ChildItem $appRoot.FullName -Recurse -File | Measure-Object -Property Length -Sum).Sum
+          Write-Host "App image: $([math]::Round($before/1MB,1)) MB -> $([math]::Round($after/1MB,1)) MB"
+
       - name: Zip portable build (max compression)
         shell: pwsh
         run: |

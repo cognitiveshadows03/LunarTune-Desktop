@@ -48,6 +48,17 @@ jobs:
           $msi = Get-ChildItem "desktop/build/compose/binaries/main/msi/*.msi" | Select-Object -First 1
           if ($msi) { Move-Item $msi.FullName "desktop/build/compose/binaries/main/msi/LunarTune-5.2.0-${{ matrix.arch }}.msi" -Force }
 
+      - name: Strip debug symbols from bundled runtime (portable only)
+        shell: pwsh
+        run: |
+          $appRoot = Get-ChildItem "desktop/build/compose/binaries/main/app" -Directory | Select-Object -First 1
+          if (-not $appRoot) { Write-Host "No app image found, skipping strip"; exit 0 }
+          $strip = "C:\Program Files\Git\usr\bin\strip.exe"
+          if (-not (Test-Path $strip)) { Write-Host "strip.exe not found, skipping"; exit 0 }
+          Get-ChildItem $appRoot.FullName -Recurse -Filter "*.dll" | ForEach-Object {
+            & $strip --strip-unneeded $_.FullName 2>$null
+          }
+
       - name: Zip portable build (max compression)
         shell: pwsh
         run: |
@@ -80,19 +91,23 @@ jobs:
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Build Linux app image and deb installer
-        run: ./gradlew :desktop:createDistributable :desktop:packageDeb -PlunarTuneArch=x64 --no-daemon
+      - name: Build app image
+        run: ./gradlew :desktop:createDistributable -PlunarTuneArch=x64 --no-daemon
 
       - name: Strip debug symbols from the bundled runtime
         run: |
           app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
-          find "$app_root" -type f \( -name "*.so" \) -exec strip --strip-unneeded {} \; 2>/dev/null || true
+          find "$app_root" -type f -name "*.so" -exec strip --strip-unneeded {} \; 2>/dev/null || true
+          find "$app_root" -type f -name "*.debuginfo" -delete 2>/dev/null || true
 
-      - name: Build portable tarball
+      - name: Build deb installer from stripped image
+        run: ./gradlew :desktop:packageDeb -PlunarTuneArch=x64 --no-daemon
+
+      - name: Build portable tarball (xz)
         run: |
           app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
           base=$(basename "$app_root")
-          tar -C "$(dirname "$app_root")" -czf "desktop/build/compose/binaries/main/LunarTune-5.2.0-x64-portable.tar.gz" "$base"
+          tar -C "$(dirname "$app_root")" -cJf "desktop/build/compose/binaries/main/LunarTune-5.2.0-x64-portable.tar.xz" "$base"
           deb=$(find desktop/build/compose/binaries/main/deb -name "*.deb" | head -n1)
           if [ -n "$deb" ]; then mv "$deb" "desktop/build/compose/binaries/main/deb/LunarTune-5.2.0-x64.deb"; fi
 
@@ -101,7 +116,7 @@ jobs:
           name: release-linux-x64
           path: |
             desktop/build/compose/binaries/main/deb/*.deb
-            desktop/build/compose/binaries/main/*-portable.tar.gz
+            desktop/build/compose/binaries/main/*-portable.tar.*
           if-no-files-found: error
 
   release:
@@ -131,3 +146,4 @@ jobs:
             release-assets/**/*.zip
             release-assets/**/*.deb
             release-assets/**/*.tar.gz
+            release-assets/**/*.tar.xz

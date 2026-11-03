@@ -106,14 +106,36 @@ compose.desktop {
             description = "LunarTune desktop music client"
             vendor = "LunarTune contributors"
 
-            // The jlink image is jpackage's --runtime-image. Compose cannot infer
-            // which JDK modules an app needs, and anything missing only shows up at
-            // runtime as the launcher's "Failed to launch JVM" - a green build tells
-            // you nothing. Skiko needs jdk.unsupported, AWT on Windows can need
-            // jdk.accessibility, the lyrics libraries reach for java.sql/java.naming,
-            // and jdeps cannot see reflection. Ship the complete module set; the
-            // classpath exclusions above still keep most of the size saving.
-            includeAllModules = true
+            // Curated jlink module list. Compose cannot infer which JDK modules an
+            // app needs, and anything missing only shows up at runtime as the
+            // launcher's "Failed to launch JVM". The previous build shipped every
+            // module (~210 MB uncompressed runtime); this set covers exactly what
+            // the app touches — AWT/Swing (java.desktop), HTTP (java.net.http),
+            // TLS (jdk.crypto.cryptoki + jdk.crypto.ec — without these, no stream
+            // resolves), XML for TTML/QRC (java.xml), the lyrics libraries
+            // (java.sql, java.naming), Skiko (jdk.unsupported), and so on — and
+            // CI's --launch-check validates the set on every build.
+            modules(
+                "java.base",
+                "java.datatransfer",
+                "java.desktop",
+                "java.logging",
+                "java.management",
+                "java.naming",
+                "java.net.http",
+                "java.prefs",
+                "java.scripting",
+                "java.security.sasl",
+                "java.sql",
+                "java.transaction.xa",
+                "java.xml",
+                "jdk.accessibility",
+                "jdk.crypto.cryptoki",
+                "jdk.crypto.ec",
+                "jdk.management",
+                "jdk.unsafe",
+                "jdk.unsupported",
+            )
 
             // Runtime tuning only - no behaviour change. String deduplication trims
             // heap pressure from the many short-lived strings the lyrics parser and
