@@ -136,9 +136,15 @@ jobs:
             (cd "$tmp/control_dir" && tar xf "$tmp/control.tar")
             echo "=== Original control file ==="
             cat "$tmp/control_dir/control"
-            # Lower libc6 to 2.17 (Temurin JDK 21 minimum; covers Ubuntu 16.04+).
+            # Strip the 't64' suffix from package names. Ubuntu 24.04 renamed
+            # several packages (libasound2 → libasound2t64, libpng16-16 →
+            # libpng16-16t64) as part of the time64 transition. The t64 names
+            # don't exist on Ubuntu 17.10-22.04; the non-t64 names work on
+            # both old and new Ubuntu (24.04 provides them as virtual packages).
+            sed -i -E 's/([a-z0-9.+-]+)t64\b/\1/g' "$tmp/control_dir/control"
+            # Lower libc6 version constraint if present (JDK 21 needs >= 2.17).
             sed -i -E 's/libc6 \(>= [0-9.]+\)/libc6 (>= 2.17)/' "$tmp/control_dir/control"
-            # Lower libstdc++6 to 3.4.21 (Ubuntu 16.04+ ships this).
+            # Lower libstdc++6 version constraint if present.
             sed -i -E 's/libstdc\+\+6 \(>= [^)]+\)/libstdc++6 (>= 3.4.21)/' "$tmp/control_dir/control"
             echo "=== Fixed control file ==="
             cat "$tmp/control_dir/control"

@@ -175,10 +175,13 @@ only require **glibc 2.17+**, so the portable archive runs on any Linux distro
 with glibc 2.17 or newer — that covers Ubuntu 16.04, 17.10, 18.04, 20.04, 22.04,
 24.04, Debian 9+, Fedora 24+, etc.
 
-The `.deb`'s `libc6` dependency is lowered to `>= 2.17` in CI (jpackage
-originally sets it from the build runner's glibc, e.g. `>= 2.35` on
-ubuntu-22.04, which is far higher than the actual requirement). This makes the
-package installable on the same range of distros as the portable archive.
+The `.deb`'s control file is post-processed in CI to strip the `t64` package
+name suffix (Ubuntu 24.04's time64 transition renamed `libasound2` →
+`libasound2t64`, `libpng16-16` → `libpng16-16t64`, etc.). The `t64` names don't
+exist on Ubuntu 17.10-22.04; the non-`t64` names work on both old and new Ubuntu
+(24.04 provides them as virtual packages). The `libc6` version constraint is
+also lowered to `>= 2.17` where present. This makes the `.deb` installable on
+the same range of distros as the portable archive.
 
 CI also:
 - Strips debug symbols from all `.so` files and UPX-compresses the large ones
