@@ -154,6 +154,41 @@ the "Report installer sizes" step.
 > `win-aarch64` native, so the arm64 build falls back to pure-Java decoding;
 > AAC streams still play. Stripping it is a possible next step.
 
+## Linux downloads
+
+CI publishes **two artifacts** for Linux x64: a `.deb` installer and a portable
+`.tar.xz` archive. Both bundle the JVM runtime — no Java needs to be installed.
+
+| Artifact | Contents |
+| --- | --- |
+| `lunartune-linux-x64-deb` | `LunarTune-5.2.0-x64.deb` |
+| `lunartune-linux-x64-portable` | `LunarTune-5.2.0-x64-portable.tar.xz` |
+
+The portable archive is the unpacked app image: extract it anywhere and run
+`LunarTune/bin/LunarTune`. The `.deb` installs system-wide via
+`sudo dpkg -i LunarTune-5.2.0-x64.deb`.
+
+### Old-distro compatibility (Ubuntu 17.10+)
+
+The bundled binaries (Temurin JDK 21, lavaplayer, skiko) are all pre-built and
+only require **glibc 2.17+**, so the portable archive runs on any Linux distro
+with glibc 2.17 or newer — that covers Ubuntu 16.04, 17.10, 18.04, 20.04, 22.04,
+24.04, Debian 9+, Fedora 24+, etc.
+
+The `.deb`'s `libc6` dependency is lowered to `>= 2.17` in CI (jpackage
+originally sets it from the build runner's glibc, which is far higher than the
+actual requirement). This makes the package installable on the same range.
+
+CI also:
+- Strips debug symbols from all `.so` files and UPX-compresses the large ones
+  (`libjvm.so`, `libskiko-linux-x64.so`) for ~25% smaller artifacts.
+- Filters `lavaplayer-natives` to Linux x64 only (the jar ships natives for
+  every platform — 26 MB → ~8 MB).
+- Recompresses the `.deb`'s `data.tar` from zstd to xz for ~15% smaller size.
+
+macOS builds are on the roadmap; the `desktop-macos.yml` workflow exists but is
+manual-only until code signing is wired up.
+
 ## Build
 
 Requires JDK 21.
@@ -163,7 +198,11 @@ Requires JDK 21.
 ./gradlew :desktop:desktopTest            # shared + desktop tests
 ./gradlew :desktop:run                    # run the app
 ./gradlew :desktop:packageMsi             # Windows installer (on Windows)
+./gradlew :desktop:packageDeb             # Linux .deb (on Linux)
+./gradlew :desktop:createDistributable    # portable app image
 ```
 
-CI verifies the shared/desktop sources on Linux and builds the Windows installers
-with `desktop-windows.yml`.
+CI verifies the shared/desktop sources on Linux (`desktop-verify.yml`) and
+builds the Windows (`desktop-windows.yml`) and Linux (`desktop-linux.yml`)
+installers. Pre-release builds for Windows x64/arm64 and Linux x64 are
+published on version tags via `release.yml`.

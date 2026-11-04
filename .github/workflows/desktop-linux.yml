@@ -26,7 +26,11 @@ on:
 
 jobs:
   linux:
-    runs-on: ubuntu-latest
+    # Build on the oldest hosted runner so the build environment's glibc is as
+    # low as possible. The bundled binaries (JDK, lavaplayer, skiko) are all
+    # pre-built and only require glibc 2.17+, so the output works on Ubuntu
+    # 17.10+. The .deb's declared libc6 dependency is lowered further below.
+    runs-on: ubuntu-20.04
     name: Linux x64
     steps:
       - uses: actions/checkout@v4
@@ -93,20 +97,59 @@ jobs:
           tar -cf - -C "$(dirname "$app_root")" "$base" | xz -9e > "$out"
           ls -lh "$out"
 
-      # Recompress the .deb's data.tar from zstd to xz. dpkg has supported
-      # data.tar.xz since Debian jessie; xz is ~15% smaller than zstd on JVM
-      # runtimes. jpackage in JDK 21 produces data.tar.zst by default.
-      - name: Recompress deb with xz
+      # Finalize the .deb: (1) lower the libc6/libstdc++6 dependencies so the
+      # package installs on Ubuntu 17.10+ (jpackage sets them from the build
+      # runner's glibc, which is far higher than the actual requirement), and
+      # (2) recompress data.tar from zstd to xz for ~15% smaller size.
+      # The bundled binaries (Temurin JDK 21, lavaplayer, skiko) are all
+      # pre-built and only require glibc 2.17+, so lowering the declared
+      # dependency is safe and makes the .deb installable on old distros.
+      - name: Fix deb deps for old distros + recompress with xz
         run: |
           deb=$(find "$(pwd)/desktop/build/compose/binaries/main/deb" -name "*.deb" | head -n1)
           if [ -z "$deb" ]; then echo "No deb found"; exit 0; fi
           echo "Deb: $deb"
+          echo "=== Original deb contents ==="
           ar t "$deb"
           before=$(stat -c%s "$deb")
           tmp=$(mktemp -d)
           cp "$deb" "$tmp/orig.deb"
           (cd "$tmp" && ar x orig.deb)
-          # Decompress data.tar.* to plain tar, then recompress with xz.
+
+          # --- Fix control file: lower glibc/libstdc++ deps for old distros ---
+          control_orig=""
+          for ext in zst gz xz; do
+            if [ -f "$tmp/control.tar.$ext" ]; then
+              control_orig="control.tar.$ext"
+              case $ext in
+                zst) zstd -d "$tmp/control.tar.$ext" -o "$tmp/control.tar" ;;
+                gz)  zcat "$tmp/control.tar.$ext" > "$tmp/control.tar" ;;
+                xz)  xz -d -c "$tmp/control.tar.$ext" > "$tmp/control.tar" ;;
+              esac
+              rm "$tmp/control.tar.$ext"
+              break
+            fi
+          done
+
+          if [ -n "$control_orig" ] && [ -f "$tmp/control.tar" ]; then
+            mkdir -p "$tmp/control_dir"
+            (cd "$tmp/control_dir" && tar xf "$tmp/control.tar")
+            echo "=== Original control file ==="
+            cat "$tmp/control_dir/control"
+            # Lower libc6 to 2.17 (Temurin JDK 21 minimum; covers Ubuntu 16.04+).
+            sed -i -E 's/libc6 \(>= [0-9.]+\)/libc6 (>= 2.17)/' "$tmp/control_dir/control"
+            # Lower libstdc++6 to 3.4.21 (Ubuntu 16.04+ ships this).
+            sed -i -E 's/libstdc\+\+6 \(>= [^)]+\)/libstdc++6 (>= 3.4.21)/' "$tmp/control_dir/control"
+            echo "=== Fixed control file ==="
+            cat "$tmp/control_dir/control"
+            (cd "$tmp/control_dir" && tar cf "$tmp/control.tar.new" .)
+            xz -9e "$tmp/control.tar.new"
+            rm "$tmp/control.tar"
+          else
+            echo "WARNING: No control.tar found, skipping dep fix"
+          fi
+
+          # --- Recompress data.tar from zstd/gzip to xz ---
           if [ -f "$tmp/data.tar.zst" ]; then
             zstd -d "$tmp/data.tar.zst" -o "$tmp/data.tar"
             rm "$tmp/data.tar.zst"
@@ -114,19 +157,35 @@ jobs:
             zcat "$tmp/data.tar.gz" > "$tmp/data.tar"
             rm "$tmp/data.tar.gz"
           elif [ -f "$tmp/data.tar.xz" ]; then
-            # Already xz — nothing to do.
-            rm -rf "$tmp"
-            exit 0
+            # Already xz — just need to reassemble with the fixed control.
+            :
           fi
-          xz -9e "$tmp/data.tar"
-          # Reassemble the deb. Keep control.tar in its original format.
-          (cd "$tmp" && ar rcs new.deb debian-binary control.tar.* data.tar.xz)
-          if [ -f "$tmp/new.deb" ] && [ $(stat -c%s "$tmp/new.deb") -lt "$before" ]; then
+          if [ -f "$tmp/data.tar" ]; then
+            xz -9e "$tmp/data.tar"
+          fi
+
+          # --- Reassemble the .deb ---
+          # Use control.tar.new.xz (fixed deps) if available, else original.
+          ctrl_arg=""
+          if [ -f "$tmp/control.tar.new.xz" ]; then
+            ctrl_arg="control.tar.new.xz"
+          else
+            ctrl_arg=$(ls "$tmp"/control.tar.* 2>/dev/null | head -1)
+          fi
+          data_arg=""
+          if [ -f "$tmp/data.tar.xz" ]; then
+            data_arg="data.tar.xz"
+          else
+            data_arg=$(ls "$tmp"/data.tar.* 2>/dev/null | head -1)
+          fi
+          (cd "$tmp" && ar rcs new.deb debian-binary "$ctrl_arg" "$data_arg")
+
+          if [ -f "$tmp/new.deb" ]; then
             cp "$tmp/new.deb" "$deb"
             after=$(stat -c%s "$deb")
-            echo "Deb: $((before/1024/1024))M -> $((after/1024/1024))M (zstd -> xz)"
+            echo "Deb: $((before/1024/1024))M -> $((after/1024/1024))M (deps fixed + recompressed)"
           else
-            echo "xz recompression didn't help, keeping original"
+            echo "ERROR: Failed to reassemble deb"
           fi
           rm -rf "$tmp"
 

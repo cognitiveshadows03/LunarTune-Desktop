@@ -94,7 +94,8 @@ jobs:
           if-no-files-found: error
 
   build-linux:
-    runs-on: ubuntu-latest
+    # Build on ubuntu-20.04 (oldest hosted runner) for broader glibc compat.
+    runs-on: ubuntu-20.04
     name: Linux x64
     steps:
       - uses: actions/checkout@v4
@@ -141,36 +142,68 @@ jobs:
       - name: Build deb from shrunk image
         run: ./gradlew :desktop:packageDeb -PlunarTuneArch=x64 --no-daemon
 
-      - name: Build portable tarball (xz -9e) and recompress deb
+      - name: Build portable tarball (xz -9e)
         run: |
           app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
           base=$(basename "$app_root")
           tar -cf - -C "$(dirname "$app_root")" "$base" | xz -9e > "desktop/build/compose/binaries/main/LunarTune-5.2.0-x64-portable.tar.xz"
+
+      # Lower libc6/libstdc++6 deps so the .deb installs on Ubuntu 17.10+,
+      # and recompress data.tar from zstd to xz for smaller size.
+      - name: Fix deb deps for old distros + recompress with xz
+        run: |
           deb=$(find "$(pwd)/desktop/build/compose/binaries/main/deb" -name "*.deb" | head -n1)
-          if [ -n "$deb" ]; then
-            before=$(stat -c%s "$deb")
-            tmp=$(mktemp -d)
-            cp "$deb" "$tmp/orig.deb"
-            (cd "$tmp" && ar x orig.deb)
-            if [ -f "$tmp/data.tar.zst" ]; then
-              zstd -d "$tmp/data.tar.zst" -o "$tmp/data.tar"
-              rm "$tmp/data.tar.zst"
-            elif [ -f "$tmp/data.tar.gz" ]; then
-              zcat "$tmp/data.tar.gz" > "$tmp/data.tar"
-              rm "$tmp/data.tar.gz"
-            elif [ -f "$tmp/data.tar.xz" ]; then
-              rm -rf "$tmp"
-              mv "$deb" "desktop/build/compose/binaries/main/deb/LunarTune-5.2.0-x64.deb"
-              exit 0
+          if [ -z "$deb" ]; then echo "No deb found"; exit 0; fi
+          before=$(stat -c%s "$deb")
+          tmp=$(mktemp -d)
+          cp "$deb" "$tmp/orig.deb"
+          (cd "$tmp" && ar x orig.deb)
+
+          # Fix control file: lower glibc/libstdc++ deps for old distros.
+          for ext in zst gz xz; do
+            if [ -f "$tmp/control.tar.$ext" ]; then
+              case $ext in
+                zst) zstd -d "$tmp/control.tar.$ext" -o "$tmp/control.tar" ;;
+                gz)  zcat "$tmp/control.tar.$ext" > "$tmp/control.tar" ;;
+                xz)  xz -d -c "$tmp/control.tar.$ext" > "$tmp/control.tar" ;;
+              esac
+              rm "$tmp/control.tar.$ext"
+              break
             fi
-            xz -9e "$tmp/data.tar"
-            (cd "$tmp" && ar rcs new.deb debian-binary control.tar.* data.tar.xz)
-            if [ -f "$tmp/new.deb" ] && [ $(stat -c%s "$tmp/new.deb") -lt "$before" ]; then
-              cp "$tmp/new.deb" "$deb"
-            fi
-            rm -rf "$tmp"
-            mv "$deb" "desktop/build/compose/binaries/main/deb/LunarTune-5.2.0-x64.deb"
+          done
+          if [ -f "$tmp/control.tar" ]; then
+            mkdir -p "$tmp/control_dir"
+            (cd "$tmp/control_dir" && tar xf "$tmp/control.tar")
+            sed -i -E 's/libc6 \(>= [0-9.]+\)/libc6 (>= 2.17)/' "$tmp/control_dir/control"
+            sed -i -E 's/libstdc\+\+6 \(>= [^)]+\)/libstdc++6 (>= 3.4.21)/' "$tmp/control_dir/control"
+            (cd "$tmp/control_dir" && tar cf "$tmp/control.tar.new" .)
+            xz -9e "$tmp/control.tar.new"
+            rm "$tmp/control.tar"
           fi
+
+          # Recompress data.tar from zstd/gzip to xz.
+          if [ -f "$tmp/data.tar.zst" ]; then
+            zstd -d "$tmp/data.tar.zst" -o "$tmp/data.tar"
+            rm "$tmp/data.tar.zst"
+          elif [ -f "$tmp/data.tar.gz" ]; then
+            zcat "$tmp/data.tar.gz" > "$tmp/data.tar"
+            rm "$tmp/data.tar.gz"
+          fi
+          if [ -f "$tmp/data.tar" ]; then
+            xz -9e "$tmp/data.tar"
+          fi
+
+          # Reassemble.
+          ctrl_arg="$(ls "$tmp"/control.tar.* 2>/dev/null | head -1)"
+          data_arg="$(ls "$tmp"/data.tar.* 2>/dev/null | head -1)"
+          (cd "$tmp" && ar rcs new.deb debian-binary "$ctrl_arg" "$data_arg")
+          if [ -f "$tmp/new.deb" ]; then
+            cp "$tmp/new.deb" "$deb"
+            after=$(stat -c%s "$deb")
+            echo "Deb: $((before/1024/1024))M -> $((after/1024/1024))M (deps fixed + recompressed)"
+          fi
+          rm -rf "$tmp"
+          mv "$deb" "desktop/build/compose/binaries/main/deb/LunarTune-5.2.0-x64.deb"
 
       - uses: actions/upload-artifact@v4
         with:
