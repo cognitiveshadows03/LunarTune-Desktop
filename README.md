@@ -176,8 +176,9 @@ with glibc 2.17 or newer — that covers Ubuntu 16.04, 17.10, 18.04, 20.04, 22.0
 24.04, Debian 9+, Fedora 24+, etc.
 
 The `.deb`'s `libc6` dependency is lowered to `>= 2.17` in CI (jpackage
-originally sets it from the build runner's glibc, which is far higher than the
-actual requirement). This makes the package installable on the same range.
+originally sets it from the build runner's glibc, e.g. `>= 2.35` on
+ubuntu-22.04, which is far higher than the actual requirement). This makes the
+package installable on the same range of distros as the portable archive.
 
 CI also:
 - Strips debug symbols from all `.so` files and UPX-compresses the large ones
