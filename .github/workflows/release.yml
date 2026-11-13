@@ -48,7 +48,7 @@ jobs:
           $msi = Get-ChildItem "desktop/build/compose/binaries/main/msi/*.msi" | Select-Object -First 1
           if ($msi) { Move-Item $msi.FullName "desktop/build/compose/binaries/main/msi/LunarTune-5.2.0-${{ matrix.arch }}.msi" -Force }
 
-      - name: Strip and UPX-compress DLLs (portable only)
+      - name: Strip and UPX-compress app DLLs (portable only)
         shell: pwsh
         run: |
           $appRoot = Get-ChildItem "desktop/build/compose/binaries/main/app" -Directory | Select-Object -First 1
@@ -60,19 +60,21 @@ jobs:
               & $strip --strip-unneeded $_.FullName 2>$null
             }
           }
+          # UPX ONLY app DLLs — never the runtime's jvm.dll etc.
+          $appLibDir = Join-Path $appRoot.FullName "lib\app"
           $upxUrl = "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-win64.zip"
           try {
             Invoke-WebRequest -Uri $upxUrl -OutFile "upx.zip" -ErrorAction Stop
             Expand-Archive "upx.zip" -DestinationPath "upx" -Force
             $upx = Get-ChildItem "upx" -Recurse -Filter "upx.exe" | Select-Object -First 1
-            if ($upx) {
-              Get-ChildItem $appRoot.FullName -Recurse -Filter "*.dll" | ForEach-Object {
+            if ($upx -and (Test-Path $appLibDir)) {
+              Get-ChildItem $appLibDir -Recurse -Filter "*.dll" | ForEach-Object {
                 & $upx.FullName --best --lzma $_.FullName 2>$null
               }
             }
           } catch { Write-Host "UPX download failed, skipping" }
           $after = (Get-ChildItem $appRoot.FullName -Recurse -File | Measure-Object -Property Length -Sum).Sum
-          Write-Host "App image: $([math]::Round($before/1MB,1)) MB -> $([math]::Round($after/1MB,1)) MB (strip + UPX)"
+          Write-Host "App image: $([math]::Round($before/1MB,1)) MB -> $([math]::Round($after/1MB,1)) MB (strip + UPX app-only)"
 
       - name: Zip portable build (max compression)
         shell: pwsh
@@ -111,7 +113,7 @@ jobs:
       - name: Build app image
         run: ./gradlew :desktop:createDistributable -PlunarTuneArch=x64 --no-daemon
 
-      - name: Shrink app image (filter natives + strip + UPX)
+      - name: Shrink app image (filter natives + strip + UPX app-only)
         run: |
           app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
           if [ -z "$app_root" ]; then echo "No app image found"; exit 1; fi
@@ -132,13 +134,44 @@ jobs:
             (cd "$tmp" && zip -q -r "$natives_jar" . )
             rm -rf "$tmp"
           fi
+          # Strip debug symbols from all .so (safe for runtime + app).
           find "$app_root" -type f -name "*.so" -exec strip --strip-all {} \; 2>/dev/null || true
-          find "$app_root" -type f -name "*.so" -exec chmod +x {} \; 2>/dev/null || true
-          if command -v upx &>/dev/null; then
-            find "$app_root" -type f -name "*.so" -size +100k -exec upx --best --lzma {} \; 2>&1 || true
+          # UPX ONLY app .so files — never the JDK runtime's libjvm.so etc.
+          app_lib_dir="$app_root/lib/app"
+          if [ -d "$app_lib_dir" ]; then
+            find "$app_lib_dir" -type f -name "*.so" -exec chmod +x {} \; 2>/dev/null || true
+            if command -v upx &>/dev/null; then
+              find "$app_lib_dir" -type f -name "*.so" -size +100k -exec upx --best --lzma {} \; 2>&1 || true
+            fi
           fi
           after=$(du -sh "$app_root" | cut -f1)
-          echo "App image: $before -> $after (filter natives + strip + UPX)"
+          echo "App image: $before -> $after (filter natives + strip + UPX app-only)"
+
+      - name: Verify the packaged runtime launches
+        run: |
+          app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
+          if [ -z "$app_root" ]; then echo "No app image found"; exit 1; fi
+          launcher=$(find "$app_root/bin" -type f -name "LunarTune" | head -n1)
+          if [ -z "$launcher" ]; then echo "No launcher found"; exit 1; fi
+          chmod +x "$launcher"
+          marker="$(pwd)/launch-check.txt"
+          rm -f "$marker"
+          "$launcher" "--launch-check=$marker" 2>&1 || true
+          if [ ! -f "$marker" ]; then
+            echo "ERROR: Launch check marker missing — the JVM never reached main()"
+            exit 1
+          fi
+          report=$(cat "$marker")
+          echo "Launch check: $report"
+          if echo "$report" | grep -q "missing="; then
+            echo "ERROR: Packaged runtime is missing JDK modules: $report"
+            exit 1
+          fi
+          if ! echo "$report" | grep -q "LUNARTUNE_LAUNCH_CHECK_OK"; then
+            echo "ERROR: Unexpected launch check report: $report"
+            exit 1
+          fi
+          rm -f "$marker"
 
       - name: Build deb from shrunk image
         run: ./gradlew :desktop:packageDeb -PlunarTuneArch=x64 --no-daemon

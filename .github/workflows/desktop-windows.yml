@@ -93,37 +93,40 @@ jobs:
           $msi = Get-ChildItem "desktop/build/compose/binaries/main/msi/*.msi" | Select-Object -First 1
           if ($msi) { Move-Item $msi.FullName "desktop/build/compose/binaries/main/msi/LunarTune-5.2.0-${{ matrix.arch }}.msi" -Force }
 
-      # Strip debug symbols from DLLs, then UPX-compress them. UPX achieves
-      # 40-60% compression on native libraries (Skiko, lavaplayer codecs) — the
-      # single biggest size win after the module curation. This only affects the
-      # portable zip; the .exe/.msi were already built from the unstripped image.
-      - name: Strip and UPX-compress DLLs (portable only)
+      # Strip debug symbols from DLLs, then UPX-compress the APPLICATION DLLs
+      # only (skiko, lavaplayer). The JDK runtime's DLLs (jvm.dll, java.dll,
+      # etc.) are NEVER UPX-compressed — UPX-packing jvm.dll breaks the JVM's
+      # LoadLibrary-based loading and causes "Failed to launch JVM".
+      # This only affects the portable zip; the .exe/.msi were already built
+      # from the unstripped image.
+      - name: Strip and UPX-compress app DLLs (portable only)
         shell: pwsh
         run: |
           $appRoot = Get-ChildItem "desktop/build/compose/binaries/main/app" -Directory | Select-Object -First 1
           if (-not $appRoot) { Write-Host "No app image found, skipping"; exit 0 }
           $before = (Get-ChildItem $appRoot.FullName -Recurse -File | Measure-Object -Property Length -Sum).Sum
-          # Strip debug symbols.
+          # Strip debug symbols from ALL DLLs (safe for runtime + app).
           $strip = "C:\Program Files\Git\usr\bin\strip.exe"
           if (Test-Path $strip) {
             Get-ChildItem $appRoot.FullName -Recurse -Filter "*.dll" | ForEach-Object {
               & $strip --strip-unneeded $_.FullName 2>$null
             }
           }
-          # Download and run UPX on DLLs.
+          # UPX ONLY app DLLs — never the runtime's jvm.dll etc.
+          $appLibDir = Join-Path $appRoot.FullName "lib\app"
           $upxUrl = "https://github.com/upx/upx/releases/download/v4.2.4/upx-4.2.4-win64.zip"
           try {
             Invoke-WebRequest -Uri $upxUrl -OutFile "upx.zip" -ErrorAction Stop
             Expand-Archive "upx.zip" -DestinationPath "upx" -Force
             $upx = Get-ChildItem "upx" -Recurse -Filter "upx.exe" | Select-Object -First 1
-            if ($upx) {
-              Get-ChildItem $appRoot.FullName -Recurse -Filter "*.dll" | ForEach-Object {
+            if ($upx -and (Test-Path $appLibDir)) {
+              Get-ChildItem $appLibDir -Recurse -Filter "*.dll" | ForEach-Object {
                 & $upx.FullName --best --lzma $_.FullName 2>$null
               }
             }
           } catch { Write-Host "UPX download failed, skipping" }
           $after = (Get-ChildItem $appRoot.FullName -Recurse -File | Measure-Object -Property Length -Sum).Sum
-          Write-Host "App image: $([math]::Round($before/1MB,1)) MB -> $([math]::Round($after/1MB,1)) MB (strip + UPX)"
+          Write-Host "App image: $([math]::Round($before/1MB,1)) MB -> $([math]::Round($after/1MB,1)) MB (strip + UPX app-only)"
 
       - name: Zip portable build (max compression)
         shell: pwsh

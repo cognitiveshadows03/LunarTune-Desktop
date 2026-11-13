@@ -47,9 +47,10 @@ jobs:
 
       # Shrink the app image: filter the lavaplayer-natives jar to Linux x64
       # only (it ships natives for every platform — 26M → ~8M), strip .so debug
-      # symbols, and UPX-compress the large .so files. Both the portable archive
-      # and the .deb benefit because the shrink runs before packageDeb and the
-      # portable tarball.
+      # symbols, and UPX-compress the large application .so files (skiko,
+      # lavaplayer). The JDK runtime's .so files (libjvm.so, libjava.so, etc.)
+      # are NEVER UPX-compressed — UPX-packing libjvm.so breaks dlopen-based JVM
+      # loading and causes "Failed to load JVM" at launch.
       - name: Shrink app image (filter natives + strip + UPX)
         run: |
           app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
@@ -74,17 +75,54 @@ jobs:
             rm -rf "$tmp"
           fi
 
-          # 2. Strip debug symbols from all .so in the app image.
+          # 2. Strip debug symbols from all .so in the app image (safe for both
+          #    runtime and app .so files).
           find "$app_root" -type f -name "*.so" -exec strip --strip-all {} \; 2>/dev/null || true
 
-          # 3. UPX the large .so files (libjvm.so, libskiko, etc.).
-          find "$app_root" -type f -name "*.so" -exec chmod +x {} \; 2>/dev/null || true
-          if command -v upx &>/dev/null; then
-            find "$app_root" -type f -name "*.so" -size +100k -exec upx --best --lzma {} \; 2>&1 || true
+          # 3. UPX-compress ONLY application .so files (skiko, lavaplayer).
+          #    NEVER UPX the JDK runtime's .so files (libjvm.so, libjava.so,
+          #    libnet.so, etc.) — UPX-packing libjvm.so breaks the JVM's
+          #    dlopen-based loading and causes "Failed to load JVM".
+          app_lib_dir="$app_root/lib/app"
+          if [ -d "$app_lib_dir" ]; then
+            find "$app_lib_dir" -type f -name "*.so" -exec chmod +x {} \; 2>/dev/null || true
+            if command -v upx &>/dev/null; then
+              find "$app_lib_dir" -type f -name "*.so" -size +100k -exec upx --best --lzma {} \; 2>&1 || true
+            fi
           fi
 
           after=$(du -sh "$app_root" | cut -f1)
-          echo "App image: $before -> $after (filter natives + strip + UPX)"
+          echo "App image: $before -> $after (filter natives + strip + UPX app-only)"
+
+      # Verify the packaged runtime launches. The app's --launch-check path
+      # loads representative classes from the JDK modules the UI needs, writes a
+      # marker and exits without opening a window. This catches a broken jlink
+      # runtime before it ships — the same check the Windows build runs.
+      - name: Verify the packaged runtime launches
+        run: |
+          app_root=$(find desktop/build/compose/binaries/main/app -maxdepth 1 -mindepth 1 -type d | head -n1)
+          if [ -z "$app_root" ]; then echo "No app image found"; exit 1; fi
+          launcher=$(find "$app_root/bin" -type f -name "LunarTune" | head -n1)
+          if [ -z "$launcher" ]; then echo "No launcher found"; exit 1; fi
+          chmod +x "$launcher"
+          marker="$(pwd)/launch-check.txt"
+          rm -f "$marker"
+          "$launcher" "--launch-check=$marker" 2>&1 || true
+          if [ ! -f "$marker" ]; then
+            echo "ERROR: Launch check marker missing — the JVM never reached main()"
+            exit 1
+          fi
+          report=$(cat "$marker")
+          echo "Launch check: $report"
+          if echo "$report" | grep -q "missing="; then
+            echo "ERROR: Packaged runtime is missing JDK modules: $report"
+            exit 1
+          fi
+          if ! echo "$report" | grep -q "LUNARTUNE_LAUNCH_CHECK_OK"; then
+            echo "ERROR: Unexpected launch check report: $report"
+            exit 1
+          fi
+          rm -f "$marker"
 
       - name: Build deb from shrunk image
         run: ./gradlew :desktop:packageDeb -PlunarTuneArch=x64 --no-daemon
